@@ -141,6 +141,8 @@ defmodule Eir.Metrics do
       write_concurrency: true
     ])
 
+    EirWeb.MetricsChannel.init_subscriber_table()
+
     for k <- @counters, do: :ets.insert(@table, {k, 0})
     :ets.insert(@table, {:connections, 0})
     :ets.insert(@table, {:rates, %{}})
@@ -195,9 +197,13 @@ defmodule Eir.Metrics do
     # broadcast only every Nth tick so 4 replicas × 100ms doesn't drown the
     # client in ~180KB/s of JSON. Counters still update every tick; the
     # dashboard just sees 4Hz updates instead of 10Hz.
+    # Also: skip the broadcast entirely if no client on this node has the
+    # dashboard open. Saves both CPU (snapshot/2 walks ETS, computes
+    # latency percentiles, etc.) and outbound bandwidth, which lets the
+    # service idle properly when no one is watching.
     tick_n = rem(state.tick_n + 1, @broadcast_every_n_ticks)
 
-    if tick_n == 0 do
+    if tick_n == 0 and EirWeb.MetricsChannel.has_subscribers?() do
       snap = snapshot()
       Phoenix.PubSub.broadcast!(@pubsub, "metrics:live", {:metrics_tick, snap})
     end

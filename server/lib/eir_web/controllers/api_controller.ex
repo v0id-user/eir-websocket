@@ -3,6 +3,15 @@ defmodule EirWeb.ApiController do
 
   alias Eir.Chat
 
+  def health(conn, _params) do
+    # Cheap healthcheck endpoint. Doesn't touch ETS/cluster/DB — Railway's
+    # healthcheck hits this every ~60s, and we don't want each ping to
+    # generate work or keep the service awake unnecessarily.
+    conn
+    |> put_resp_header("cache-control", "no-store")
+    |> send_resp(200, "ok")
+  end
+
   def presets(conn, _params) do
     json(conn, Chat.presets())
   end

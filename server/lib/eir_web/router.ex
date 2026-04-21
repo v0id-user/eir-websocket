@@ -17,6 +17,7 @@ defmodule EirWeb.Router do
   scope "/api", EirWeb do
     pipe_through :api
 
+    get "/health", ApiController, :health
     get "/presets", ApiController, :presets
     get "/groups/:group_id/messages", ApiController, :history
     get "/stats", ApiController, :stats
