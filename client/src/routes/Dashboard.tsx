@@ -114,15 +114,36 @@ export function Dashboard() {
       </div>
 
       <StatGrid>
-        <Stat label="msgs/sec in" value={fmt(agg?.rate_in)} />
-        <Stat label="msgs/sec persisted" value={fmt(agg?.rate_persisted)} />
-        <Stat label="queue depth" value={agg?.queue_depth ?? "-"} />
-        <Stat label="ws connections" value={agg?.connections ?? "-"} />
-        <Stat label="total cached" value={agg?.cache_total ?? "-"} />
+        <Stat
+          label="msgs/sec in"
+          value={fmt(agg?.rate_in)}
+          tip="messages per second the cluster is INGESTING (sum across all replicas). Each Chat.ingest call counts once."
+        />
+        <Stat
+          label="msgs/sec persisted"
+          value={fmt(agg?.rate_persisted)}
+          tip="rows per second Broadway is INSERTing into Postgres (cluster-wide). Should track ingest closely; if it lags, the queue depth grows."
+        />
+        <Stat
+          label="queue depth"
+          value={agg?.queue_depth ?? "-"}
+          tip="messages waiting in Broadway's buffer to be batched and persisted. Cluster-wide sum. Stays near 0 in healthy steady state."
+        />
+        <Stat
+          label="ws connections"
+          value={agg?.connections ?? "-"}
+          tip="live Phoenix.Channel processes (one per connected WS) across the cluster. ~= number of connected clients."
+        />
+        <Stat
+          label="total cached"
+          value={agg?.cache_total ?? "-"}
+          tip="message rows held in per-node ETS ring buffers. Capped at 200 per group per node; cluster-wide total = sum across replicas."
+        />
         <Stat
           label="processes"
           value={agg ? `${agg.processes}` : "-"}
           sub={agg ? `of ${fmt(agg.processes_limit)}` : ""}
+          tip="Erlang processes alive cluster-wide. Each WS connection ≈ 1 channel process. BEAM default limit per node is 1M+."
         />
         <Stat
           label="memory total"
@@ -132,8 +153,13 @@ export function Dashboard() {
               ? `proc ${agg.memory_processes_mb.toFixed(0)} . bin ${agg.memory_binary_mb.toFixed(0)}`
               : ""
           }
+          tip="resident BEAM heap cluster-wide (sum). Sub-line shows process heap + binary heap totals."
         />
-        <Stat label="run queue" value={agg?.run_queue ?? "-"} />
+        <Stat
+          label="run queue"
+          value={agg?.run_queue ?? "-"}
+          tip="processes waiting for a scheduler right now (cluster-wide). >0 sustained = CPU-bound."
+        />
       </StatGrid>
 
       <div style={{ height: 1 }} />
@@ -143,37 +169,45 @@ export function Dashboard() {
           label="reductions/s"
           value={fmt(agg?.rate_reductions)}
           sub={agg ? `${fmt(agg.reductions_total)} total` : ""}
+          tip="BEAM scheduler 'reductions' per second across the cluster. ~1 reduction = 1 unit of work (function call, send, etc). Idle BEAM ≈ 100k/s/node, busy = millions+. The native unit of how much the runtime is doing."
         />
         <Stat
           label="atoms"
           value={agg ? fmt(agg.atoms) : "-"}
           sub={agg ? `of ${fmt(agg.atoms_limit)}` : ""}
+          tip="atom table size. Atoms are interned and never GC'd; should stay flat in production. Growth = a leak."
         />
         <Stat
           label="ports"
           value={agg ? `${agg.ports}` : "-"}
           sub={agg ? `of ${fmt(agg.ports_limit)}` : ""}
+          tip="open Erlang ports cluster-wide. Each TCP/WS socket and external program is a port."
         />
         <Stat
           label="ets tables"
           value={agg ? `${agg.ets_tables}` : "-"}
           sub={agg ? `${agg.memory_ets_mb.toFixed(1)}mb` : ""}
+          tip="ETS table count + total ETS memory. Phoenix internals + app caches all live here."
         />
         <Stat
           label="binary mem"
           value={agg ? `${agg.memory_binary_mb.toFixed(1)}mb` : "-"}
+          tip="reference-counted binary heap. Strings/JSON > 64 bytes live here. Big growth = held references somewhere."
         />
         <Stat
           label="code mem"
           value={agg ? `${agg.memory_code_mb.toFixed(1)}mb` : "-"}
+          tip="loaded BEAM bytecode. Stays flat unless you hot-load modules at runtime."
         />
         <Stat
           label="io in/out"
           value={agg ? `${agg.io_in_mb.toFixed(0)}/${agg.io_out_mb.toFixed(0)}mb` : "-"}
+          tip="cumulative bytes the BEAM has read / written through ports. Includes WS, DB connections, etc."
         />
         <Stat
           label="schedulers"
           value={agg ? `${agg.schedulers}` : "-"}
+          tip="online normal schedulers per node. BEAM also runs dirty CPU + dirty IO schedulers separately."
         />
       </StatGrid>
 
@@ -248,13 +282,18 @@ function Stat({
   label,
   value,
   sub,
+  tip,
 }: {
   label: string;
   value: React.ReactNode;
   sub?: string;
+  tip?: string;
 }) {
   return (
-    <div style={{ background: "#0a0a0a", padding: "6px 10px", minHeight: 56 }}>
+    <div
+      style={{ background: "#0a0a0a", padding: "6px 10px", minHeight: 56 }}
+      title={tip}
+    >
       <div
         style={{
           fontSize: 9,
@@ -819,6 +858,7 @@ function ChaosControls({ byNode }: { byNode: NodeMap }) {
   const [status, setStatus] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const nodes = Object.keys(byNode).sort();
+  const singleNode = nodes.length <= 1;
 
   async function kill(victim?: string) {
     setBusy(true);
@@ -837,15 +877,39 @@ function ChaosControls({ byNode }: { byNode: NodeMap }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 12 }}>
       <div style={{ color: "#888" }}>
         kill a replica and watch the cluster heal. railway restarts the
-        container, dns_cluster rejoins it, phoenix.pubsub reconnects. you
-        should see the node drop out of the nodes panel, then reappear.
+        container, dns_cluster rejoins it, phoenix.pubsub reconnects. nodes
+        panel shrinks then grows back over ~6 seconds.
       </div>
+      {singleNode && (
+        <div
+          style={{
+            color: "#c9a76a",
+            fontSize: 11,
+            background: "#1a1613",
+            border: "1px solid #2a221a",
+            padding: "6px 8px",
+          }}
+          title="with one replica there's nobody to take over while it restarts. you'd just kill the whole service for ~10s. scale eir-server to 2+ replicas in the railway ui first."
+        >
+          ⚠ only 1 replica — chaos demo is moot. scale eir-server to 2+
+          in the railway ui to see the cluster actually heal.
+        </div>
+      )}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        <button onClick={() => kill()} disabled={busy || nodes.length === 0}>
+        <button
+          onClick={() => kill()}
+          disabled={busy || nodes.length === 0 || singleNode}
+          title={singleNode ? "scale to 2+ replicas first" : "kill a random replica"}
+        >
           [ kill random ]
         </button>
         {nodes.map((n) => (
-          <button key={n} onClick={() => kill(n)} disabled={busy} title={n}>
+          <button
+            key={n}
+            onClick={() => kill(n)}
+            disabled={busy || singleNode}
+            title={singleNode ? "scale to 2+ replicas first" : n}
+          >
             [ kill {shortNode(n)} ]
           </button>
         ))}
@@ -874,14 +938,67 @@ function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, Math.floor(n)));
 }
 
+type RunSummary = {
+  config: { connections: number; mps: number; duration: number };
+  totalSent: number;
+  totalRecv: number;
+  errors: number;
+  peakSent: number;
+  peakRecv: number;
+  fanout: number;
+  endedAt: number;
+};
+
 function SimControls({ sim }: { sim: SimSnapshot | null }) {
   const [connections, setConnections] = useState(150);
   const [mps, setMps] = useState(8);
   const [duration, setDuration] = useState(30);
   const [status, setStatus] = useState<string>("");
+  const [lastRun, setLastRun] = useState<RunSummary | null>(null);
 
   const target = SOCKET_URL + "/websocket";
   const running = sim?.run != null;
+
+  // Track peaks during a run, snapshot a summary when it ends
+  const peakSentRef = useRef(0);
+  const peakRecvRef = useRef(0);
+  const wasRunningRef = useRef(false);
+  const runConfigRef = useRef<{ connections: number; mps: number; duration: number } | null>(null);
+
+  useEffect(() => {
+    if (!sim) return;
+    if (running) {
+      peakSentRef.current = Math.max(peakSentRef.current, sim.rates.sent || 0);
+      peakRecvRef.current = Math.max(peakRecvRef.current, sim.rates.received || 0);
+      wasRunningRef.current = true;
+    } else if (wasRunningRef.current) {
+      // run just finished — snapshot final counters
+      const totalSent = sim.counters.sent;
+      const totalRecv = sim.counters.received;
+      setLastRun({
+        config: runConfigRef.current ?? { connections, mps, duration },
+        totalSent,
+        totalRecv,
+        errors: sim.counters.send_errors,
+        peakSent: peakSentRef.current,
+        peakRecv: peakRecvRef.current,
+        fanout: totalSent > 0 ? totalRecv / totalSent : 0,
+        endedAt: sim.at_ms,
+      });
+      peakSentRef.current = 0;
+      peakRecvRef.current = 0;
+      wasRunningRef.current = false;
+    }
+  }, [sim, running, connections, mps, duration]);
+
+  const liveFanout =
+    sim && sim.rates.sent && sim.rates.sent > 0
+      ? (sim.rates.received || 0) / sim.rates.sent
+      : null;
+  const perClientRate =
+    sim && sim.counters.connected > sim.counters.disconnected && sim.rates.sent
+      ? sim.rates.sent / (sim.counters.connected - sim.counters.disconnected)
+      : null;
 
   const { data: presets } = useQuery({
     queryKey: ["presets"],
@@ -900,6 +1017,9 @@ function SimControls({ sim }: { sim: SimSnapshot | null }) {
     const m = clamp(mps, SIM_LIMITS.mps.min, SIM_LIMITS.mps.max);
     const d = clamp(duration, SIM_LIMITS.duration.min, SIM_LIMITS.duration.max);
     setConnections(c); setMps(m); setDuration(d);
+    runConfigRef.current = { connections: c, mps: m, duration: d };
+    peakSentRef.current = 0;
+    peakRecvRef.current = 0;
     setStatus("> starting...");
     try {
       const r = await api.sim.run({ target, connections: c, msgs_per_sec: m, duration: d });
@@ -984,15 +1104,117 @@ function SimControls({ sim }: { sim: SimSnapshot | null }) {
             paddingTop: 6,
           }}
         >
-          <span>sent: {sim.counters.sent} . received: {sim.counters.received}</span>
-          <span>
-            sent/s: {sim.rates.sent?.toFixed(0) ?? "-"} . recv/s:{" "}
-            {sim.rates.received?.toFixed(0) ?? "-"}
-          </span>
-          <span>
-            connected: {sim.counters.connected - sim.counters.disconnected} .
-            errors: {sim.counters.send_errors}
-          </span>
+          <div
+            style={{ display: "flex", justifyContent: "space-between" }}
+            title="cumulative messages this sim has SENT to the server (resets on each new run)"
+          >
+            <span>sent</span>
+            <span style={{ color: "#c0c0c0" }}>{sim.counters.sent.toLocaleString()}</span>
+          </div>
+          <div
+            style={{ display: "flex", justifyContent: "space-between" }}
+            title="cumulative WS frames RECEIVED across all sim clients combined. each chat msg fans out to ~N subscribers per group, so this is roughly sent × subscribers-per-group + acks"
+          >
+            <span>received</span>
+            <span style={{ color: "#c0c0c0" }}>{sim.counters.received.toLocaleString()}</span>
+          </div>
+          <div
+            style={{ display: "flex", justifyContent: "space-between" }}
+            title="messages per second the sim is producing right now (sum across all clients)"
+          >
+            <span>sent/s</span>
+            <span style={{ color: "#c0c0c0" }}>
+              {sim.rates.sent?.toFixed(0) ?? "-"}
+            </span>
+          </div>
+          <div
+            style={{ display: "flex", justifyContent: "space-between" }}
+            title="WS frames per second the server is delivering to all sim clients (mostly group broadcasts)"
+          >
+            <span>recv/s</span>
+            <span style={{ color: "#c0c0c0" }}>
+              {sim.rates.received?.toFixed(0) ?? "-"}
+            </span>
+          </div>
+          {liveFanout != null && (
+            <div
+              style={{ display: "flex", justifyContent: "space-between" }}
+              title="recv/s ÷ sent/s. how many subscribers each message reaches on average. ~clients-per-group + 1"
+            >
+              <span>fan-out</span>
+              <span style={{ color: "#c0c0c0" }}>{liveFanout.toFixed(2)}×</span>
+            </div>
+          )}
+          {perClientRate != null && (
+            <div
+              style={{ display: "flex", justifyContent: "space-between" }}
+              title="sent/s ÷ live connection count. should track your configured msgs/sec each"
+            >
+              <span>per-client/s</span>
+              <span style={{ color: "#c0c0c0" }}>{perClientRate.toFixed(1)}</span>
+            </div>
+          )}
+          <div
+            style={{ display: "flex", justifyContent: "space-between" }}
+            title="live WS connections to the server right now"
+          >
+            <span>connected</span>
+            <span style={{ color: "#c0c0c0" }}>
+              {sim.counters.connected - sim.counters.disconnected}
+            </span>
+          </div>
+          <div
+            style={{ display: "flex", justifyContent: "space-between" }}
+            title="failed sends since last reset (network errors, channel rejects, etc.)"
+          >
+            <span>errors</span>
+            <span style={{ color: sim.counters.send_errors > 0 ? "#c9a76a" : "#c0c0c0" }}>
+              {sim.counters.send_errors}
+            </span>
+          </div>
+        </div>
+      )}
+      {lastRun && !running && (
+        <div
+          style={{
+            fontSize: 11,
+            color: "#888",
+            display: "grid",
+            gap: 2,
+            borderTop: "1px solid #333",
+            paddingTop: 6,
+          }}
+          title="totals + peaks captured when the previous run finished. cleared when you start a new one."
+        >
+          <div style={{ color: "#888", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>
+            last run · {lastRun.config.connections}c × {lastRun.config.mps}/s × {lastRun.config.duration}s
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }} title="total messages successfully sent during the run">
+            <span>total sent</span>
+            <span style={{ color: "#c0c0c0" }}>{lastRun.totalSent.toLocaleString()}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }} title="total WS frames received across all sim clients during the run">
+            <span>total received</span>
+            <span style={{ color: "#c0c0c0" }}>{lastRun.totalRecv.toLocaleString()}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }} title="highest msg/s the sim hit during the run">
+            <span>peak sent/s</span>
+            <span style={{ color: "#c0c0c0" }}>{lastRun.peakSent.toFixed(0)}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }} title="highest recv/s — the server's max outbound delivery rate during the run">
+            <span>peak recv/s</span>
+            <span style={{ color: "#c0c0c0" }}>{lastRun.peakRecv.toFixed(0)}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }} title="average broadcast amplification: total received ÷ total sent">
+            <span>fan-out</span>
+            <span style={{ color: "#c0c0c0" }}>{lastRun.fanout.toFixed(2)}×</span>
+          </div>
+          {lastRun.errors > 0 && (
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span>errors</span>
+              <span style={{ color: "#c9a76a" }}>{lastRun.errors}</span>
+            </div>
+          )}
         </div>
       )}
       {presets && (
