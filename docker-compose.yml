@@ -1,0 +1,56 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: eir_prod
+    ports: ["5432:5432"]
+    volumes:
+      - eir_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      retries: 20
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: ecto://postgres:postgres@db/eir_prod
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:-local-dev-secret-key-base-at-least-64-characters-long-please-change}
+      PHX_HOST: localhost
+      PORT: "4000"
+      # Clustering: DNS-based discovery across replicas (if scaled via compose scale)
+      DNS_CLUSTER_QUERY: server
+      # Release cookie — must match across nodes
+      RELEASE_COOKIE: eir-dev-cookie-change-me
+      ERLANG_COOKIE: eir-dev-cookie-change-me
+      # BEAM node name; resolvable inside the compose network
+      RELEASE_DISTRIBUTION: name
+    ports: ["4000:4000"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  simulator:
+    build:
+      context: ./simulator
+      dockerfile: Dockerfile
+    environment:
+      PORT: "4100"
+    ports: ["4100:4100"]
+    depends_on: [server]
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+      args:
+        VITE_SERVER_URL: http://localhost:4000
+        VITE_SIM_URL: http://localhost:4100
+        VITE_SOCKET_URL: ws://localhost:4000/socket
+    ports: ["8080:8080"]
+
+volumes:
+  eir_pgdata:

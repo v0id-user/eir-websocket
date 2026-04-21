@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm -rf server/.git)",
+      "Bash(git add *)",
+      "Bash(git -c user.email=hey@v0id.me -c user.name=v0id commit -q -m \"initial: phoenix + simulator + react client\")"
+    ]
+  }
+}
