@@ -616,16 +616,20 @@ function IngestHeatmapImpl({ byNode }: { byNode: NodeMap }) {
                 {groups.map((g) => {
                   const v = s.ingest_by_group?.[g] || 0;
                   const pct = v / max;
-                  const lightness = 5 + Math.round(pct * 55);
+                  // Cap lightness at ~28% and saturation at ~45% so cells
+                  // stay in the dark-green range that #d8d8d8 text reads
+                  // against. Pure neon green at 60% lightness fails contrast.
+                  const lightness = 6 + Math.round(pct * 22);
+                  const saturation = Math.round(pct * 45);
                   const bg =
-                    v === 0 ? "#0f0f0f" : `hsl(120, ${Math.round(pct * 100)}%, ${lightness}%)`;
+                    v === 0 ? "#0f0f0f" : `hsl(120, ${saturation}%, ${lightness}%)`;
                   return (
                     <td
                       key={g}
                       title={`${name} · ${g}: ${v}`}
                       style={{
                         background: bg,
-                        color: v === 0 ? "#333" : "#e0e0e0",
+                        color: v === 0 ? "#333" : "#d8d8d8",
                         padding: "4px 6px",
                         textAlign: "center",
                         border: "1px solid #1a1a1a",
