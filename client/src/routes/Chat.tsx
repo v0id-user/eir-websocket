@@ -8,6 +8,12 @@ import { Presence, type Channel } from "phoenix";
 
 type PresenceUser = { nickname: string; node: string; online_at: number };
 
+// Hard cap on rendered messages. Under heavy load a group can fan out
+// hundreds of msgs/sec to every client; keeping an unbounded list in
+// state kills both React reconciliation cost and DOM node count.
+// "Load older" can still grow past this; new live messages evict oldest.
+const MAX_MESSAGES = 500;
+
 const MENTION_RE = /(@[a-zA-Z0-9_-]+)/g;
 
 function containsMention(body: string, nick: string): boolean {
@@ -45,8 +51,13 @@ export function Chat() {
   const [draft, setDraft] = useState("");
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [joinedSource, setJoinedSource] = useState<string>("");
+  const [followLatest, setFollowLatest] = useState(true);
   const channelRef = useRef<Channel | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  // Buffer incoming messages and flush once per animation frame so a
+  // firehose of broadcasts collapses into one setState per frame.
+  const pendingRef = useRef<Message[]>([]);
+  const rafRef = useRef<number | null>(null);
 
   const messagesById = useMemo(() => {
     const m = new Map<string, Message>();
@@ -75,11 +86,31 @@ export function Chat() {
       setPresence(list);
     };
 
-    ch.on("message", (m: Message) => {
+    const flush = () => {
+      rafRef.current = null;
+      const batch = pendingRef.current;
+      if (batch.length === 0) return;
+      pendingRef.current = [];
+
       setMessages((prev) => {
-        if (prev.some((x) => x.id === m.id)) return prev;
-        return [...prev, m];
+        const existing = new Set(prev.map((m) => m.id));
+        const additions = batch.filter((m) => !existing.has(m.id));
+        if (additions.length === 0) return prev;
+
+        const next = prev.concat(additions);
+        // cap by dropping oldest so the live stream stays bounded
+        if (next.length > MAX_MESSAGES) {
+          return next.slice(next.length - MAX_MESSAGES);
+        }
+        return next;
       });
+    };
+
+    ch.on("message", (m: Message) => {
+      pendingRef.current.push(m);
+      if (rafRef.current == null) {
+        rafRef.current = requestAnimationFrame(flush);
+      }
     });
 
     ch.on("presence_state", (state) => {
@@ -107,13 +138,27 @@ export function Chat() {
     return () => {
       ch.leave();
       channelRef.current = null;
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+      pendingRef.current = [];
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupId]);
 
   useEffect(() => {
-    scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
-  }, [messages.length]);
+    // Only auto-scroll if the user is already near the bottom. Otherwise
+    // they've scrolled up to read history and we shouldn't yank them.
+    if (followLatest) {
+      scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
+    }
+  }, [messages.length, followLatest]);
+
+  function onScroll() {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (nearBottom !== followLatest) setFollowLatest(nearBottom);
+  }
 
   async function loadMore() {
     if (messages.length === 0) return;
@@ -222,7 +267,8 @@ export function Chat() {
         </div>
         <div
           ref={scrollerRef}
-          style={{ flex: 1, overflow: "auto", padding: "8px 12px" }}
+          onScroll={onScroll}
+          style={{ flex: 1, overflow: "auto", padding: "8px 12px", position: "relative" }}
         >
           {messages.map((m) => {
             const parent = m.reply_to_id ? messagesById.get(m.reply_to_id) : null;
@@ -283,6 +329,26 @@ export function Chat() {
             );
           })}
         </div>
+        {!followLatest && (
+          <div
+            onClick={() => {
+              setFollowLatest(true);
+              scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
+            }}
+            style={{
+              borderTop: "1px solid #333",
+              padding: "4px 10px",
+              fontSize: 11,
+              background: "#141613",
+              color: "#c9a76a",
+              cursor: "pointer",
+              textAlign: "center",
+            }}
+            title="new messages are arriving below"
+          >
+            ↓ paused · click to jump to latest
+          </div>
+        )}
         {replyTo && (
           <div
             style={{
