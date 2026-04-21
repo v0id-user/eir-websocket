@@ -96,10 +96,16 @@ defmodule Eir.Chat do
     Eir.Repo.all(query) |> Enum.reverse()
   end
 
-  @doc "Wipe everything — DB + cache. Used between test runs."
+  @doc """
+  Wipe everything — DB + every node's cache + every node's counters.
+
+  DB delete is a single shared-table truncate. For the per-node state we
+  broadcast on `eir:reset`; the `Cache` and `Metrics` GenServer on every
+  connected node subscribe to that topic and clear their local ETS on receipt.
+  """
   def reset_all do
     Eir.Repo.delete_all(Message)
-    Cache.reset()
+    PubSub.broadcast!(@pubsub, "eir:reset", :reset_local)
     PubSub.broadcast!(@pubsub, "firehose", {:chat_reset, %{at: DateTime.utc_now()}})
     :ok
   end

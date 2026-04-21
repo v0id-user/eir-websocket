@@ -93,5 +93,7 @@ export const api = {
       }).then(json<{ ok: boolean; run?: SimSnapshot["run"]; error?: string }>),
     stop: () =>
       fetch(`${SIM_URL}/stop`, { method: "POST" }).then(json<{ ok: boolean }>),
+    reset: () =>
+      fetch(`${SIM_URL}/reset`, { method: "POST" }).then(json<{ ok: boolean }>),
   },
 };

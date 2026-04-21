@@ -118,9 +118,17 @@ defmodule Eir.Metrics do
 
     attach_telemetry()
 
+    Phoenix.PubSub.subscribe(@pubsub, "eir:reset")
     :timer.send_interval(@tick_ms, :tick)
 
-    {:ok, %{prev: now_counters(), prev_at: System.monotonic_time(:millisecond)}}
+    {:reds, prev_reds} = :erlang.statistics(:reductions)
+
+    {:ok,
+     %{
+       prev: now_counters(),
+       prev_at: System.monotonic_time(:millisecond),
+       prev_reds: prev_reds
+     }}
   end
 
   @impl true
@@ -129,18 +137,32 @@ defmodule Eir.Metrics do
     dt = max(now_at - state.prev_at, 1)
     curr = now_counters()
 
+    {total_reds, _} = :erlang.statistics(:reductions)
+    reds_delta = max(total_reds - state.prev_reds, 0)
+    reds_per_sec = reds_delta * 1000 / dt
+
     rates =
       for {k, v} <- curr, into: %{} do
         delta = v - Map.get(state.prev, k, 0)
         {k, Float.round(delta * 1000 / dt, 1)}
       end
 
+    rates = Map.put(rates, :reductions, Float.round(reds_per_sec, 0))
+
     :ets.insert(@table, {:rates, rates})
 
     snap = snapshot()
     Phoenix.PubSub.broadcast!(@pubsub, "metrics:live", {:metrics_tick, snap})
 
-    {:noreply, %{state | prev: curr, prev_at: now_at}}
+    {:noreply, %{state | prev: curr, prev_at: now_at, prev_reds: total_reds}}
+  end
+
+  @impl true
+  def handle_info(:reset_local, state) do
+    for k <- @counters, do: :ets.insert(@table, {k, 0})
+    :ets.insert(@table, {:connections, 0})
+    :ets.insert(@table, {:rates, %{}})
+    {:noreply, %{state | prev: now_counters(), prev_at: System.monotonic_time(:millisecond)}}
   end
 
   defp now_counters do

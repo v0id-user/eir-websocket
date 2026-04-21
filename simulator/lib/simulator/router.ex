@@ -27,6 +27,12 @@ defmodule Simulator.Router do
     send_json(conn, %{ok: true})
   end
 
+  post "/reset" do
+    Simulator.RunManager.stop_run()
+    Simulator.Stats.reset()
+    send_json(conn, %{ok: true})
+  end
+
   match _ do
     send_json(conn, %{error: "not_found"}, 404)
   end

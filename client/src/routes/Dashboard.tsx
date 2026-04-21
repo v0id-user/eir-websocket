@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type Snapshot, type SimSnapshot } from "../lib/api";
 import { joinMetrics } from "../lib/socket";
@@ -11,9 +11,8 @@ export function Dashboard() {
   const [byNode, setByNode] = useState<NodeMap>({});
   const [sim, setSim] = useState<SimSnapshot | null>(null);
   const [history, setHistory] = useState<
-    { at: number; in: number; persisted: number; reductions: number }[]
+    { at: number; in: number; persisted: number }[]
   >([]);
-  const prevRedsRef = useRef<{ total: number; at: number } | null>(null);
 
   useEffect(() => {
     const ch = joinMetrics(getNickname());
@@ -34,25 +33,10 @@ export function Dashboard() {
 
   useEffect(() => {
     if (!agg) return;
-    setHistory((h) => {
-      const prev = prevRedsRef.current;
-      const now = agg.at_ms;
-      let redsPerSec = 0;
-      if (prev && now > prev.at) {
-        redsPerSec =
-          ((agg.reductions_total - prev.total) * 1000) / (now - prev.at);
-      }
-      prevRedsRef.current = { total: agg.reductions_total, at: now };
-      return [
-        ...h.slice(-59),
-        {
-          at: now,
-          in: agg.rate_in,
-          persisted: agg.rate_persisted,
-          reductions: redsPerSec,
-        },
-      ];
-    });
+    setHistory((h) => [
+      ...h.slice(-59),
+      { at: agg.at_ms, in: agg.rate_in, persisted: agg.rate_persisted },
+    ]);
   }, [agg?.at_ms]);
 
   useEffect(() => {
@@ -115,7 +99,7 @@ export function Dashboard() {
       <StatGrid>
         <Stat
           label="reductions/s"
-          value={fmt(history.at(-1)?.reductions)}
+          value={fmt(agg?.rate_reductions)}
           sub={agg ? `${fmt(agg.reductions_total)} total` : ""}
         />
         <Stat
@@ -338,6 +322,7 @@ function aggregate(byNode: NodeMap) {
     at_ms: last.at_ms,
     rate_in: sum((s) => s.rates?.ingest_received || 0),
     rate_persisted: sum((s) => s.rates?.batch_persisted || 0),
+    rate_reductions: sum((s) => s.rates?.reductions || 0),
     queue_depth: sum((s) => s.pipeline?.queue_depth || 0),
     connections: sum((s) => s.connections || 0),
     cache_total: sum((s) => s.cache?.total || 0),
@@ -367,8 +352,8 @@ function Chart({
   history,
   series,
 }: {
-  history: { at: number; in: number; persisted: number; reductions: number }[];
-  series: { key: "in" | "persisted" | "reductions"; label: string; color: string }[];
+  history: { at: number; in: number; persisted: number }[];
+  series: { key: "in" | "persisted"; label: string; color: string }[];
 }) {
   const w = 600;
   const h = 180;
@@ -502,8 +487,9 @@ function SimControls({ sim }: { sim: SimSnapshot | null }) {
   }
 
   async function reset() {
-    await api.reset();
-    setStatus("> db + cache reset");
+    setStatus("> resetting...");
+    await Promise.all([api.reset(), api.sim.reset().catch(() => {})]);
+    setStatus("> db + cache + sim reset");
   }
 
   return (

@@ -75,12 +75,20 @@ defmodule Eir.Chat.Cache do
   def init(_) do
     :ets.new(@table, [:ordered_set, :public, :named_table, read_concurrency: true, write_concurrency: true])
     :ets.new(@counts, [:set, :public, :named_table, write_concurrency: true])
+    Phoenix.PubSub.subscribe(Eir.PubSub, "eir:reset")
     {:ok, %{}}
   end
 
   @impl true
   def handle_cast({:trim, group_id}, state) do
     trim(group_id)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(:reset_local, state) do
+    :ets.delete_all_objects(@table)
+    :ets.delete_all_objects(@counts)
     {:noreply, state}
   end
 
