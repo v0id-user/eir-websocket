@@ -18,6 +18,7 @@ defmodule Eir.Bot do
 
   @bot_nick "bot"
   @anthropic_model "claude-sonnet-4-5"
+  @openrouter_default_model "meta-llama/llama-3.3-70b-instruct:free"
   @max_reply_chars 400
 
   # Each node starts its own bot. Only the node that is the current "leader"
@@ -28,20 +29,30 @@ defmodule Eir.Bot do
 
   @impl true
   def init(_) do
-    # subscribe once per preset group; newly-dynamic groups aren't covered
-    # (we have a fixed preset in this demo)
     for g <- Eir.Chat.presets().groups do
       Phoenix.PubSub.subscribe(Eir.PubSub, "group:" <> g)
     end
 
-    state = %{
-      api_key: System.get_env("ANTHROPIC_API_KEY"),
-      # in-flight rate limiting: max 1 request at a time
-      busy?: false
-    }
+    provider =
+      cond do
+        System.get_env("OPENROUTER_API_KEY") not in [nil, ""] ->
+          {:openrouter, System.get_env("OPENROUTER_API_KEY"),
+           System.get_env("BOT_MODEL") || @openrouter_default_model}
 
+        System.get_env("ANTHROPIC_API_KEY") not in [nil, ""] ->
+          {:anthropic, System.get_env("ANTHROPIC_API_KEY"), @anthropic_model}
+
+        true ->
+          :canned
+      end
+
+    state = %{provider: provider, busy?: false}
+    Logger.info("Eir.Bot provider: #{inspect(elem_or_self(provider))}")
     {:ok, state}
   end
+
+  defp elem_or_self({tag, _key, model}), do: "#{tag} (#{model})"
+  defp elem_or_self(other), do: other
 
   @impl true
   def handle_info({:chat_message, msg}, state) do
@@ -75,19 +86,17 @@ defmodule Eir.Bot do
 
   defp spawn_reply(msg, state) do
     parent = self()
-    api_key = state.api_key
+    provider = state.provider
     group_id = msg.group_id
     msg_id = msg.id
     prompt = msg.body
 
     Task.start(fn ->
       reply =
-        case api_key do
-          key when is_binary(key) and byte_size(key) > 0 ->
-            ask_claude(prompt, key) || canned(prompt)
-
-          _ ->
-            canned(prompt)
+        case provider do
+          {:openrouter, key, model} -> ask_openrouter(prompt, key, model) || canned(prompt)
+          {:anthropic, key, _model} -> ask_claude(prompt, key) || canned(prompt)
+          :canned -> canned(prompt)
         end
 
       if is_binary(reply) and reply != "" do
@@ -101,6 +110,62 @@ defmodule Eir.Bot do
 
       send(parent, {:reply_done, msg_id})
     end)
+  end
+
+  defp ask_openrouter(prompt, api_key, model) do
+    body =
+      Jason.encode!(%{
+        model: model,
+        max_tokens: 220,
+        messages: [
+          %{
+            role: "system",
+            content:
+              "You are a terse chat bot in a stress-test chatroom on an Elixir/BEAM server. " <>
+                "Keep replies under 2 short sentences. Lowercase, no emojis, irc-ish tone. " <>
+                "If asked about infra, know the stack is Phoenix + Broadway + ETS + Phoenix.PubSub " <>
+                "across 4 clustered nodes on Railway."
+          },
+          %{role: "user", content: prompt}
+        ]
+      })
+
+    headers = [
+      {~c"authorization", String.to_charlist("Bearer " <> api_key)},
+      {~c"content-type", ~c"application/json"},
+      {~c"http-referer", ~c"https://eir-client-production.up.railway.app"},
+      {~c"x-title", ~c"eir-websocket"}
+    ]
+
+    request =
+      {~c"https://openrouter.ai/api/v1/chat/completions", headers, ~c"application/json", body}
+
+    case :httpc.request(:post, request, [{:timeout, 20_000}], []) do
+      {:ok, {{_, 200, _}, _hdrs, resp_body}} ->
+        case Jason.decode(IO.iodata_to_binary(resp_body)) do
+          {:ok, %{"choices" => [%{"message" => %{"content" => text}} | _]}} when is_binary(text) ->
+            String.trim(text)
+
+          other ->
+            Logger.warning("bot openrouter parse error: #{inspect(other)}")
+            nil
+        end
+
+      {:ok, {{_, status, _}, _hdrs, resp_body}} ->
+        Logger.warning(
+          "bot openrouter http #{status}: #{IO.iodata_to_binary(resp_body) |> String.slice(0, 300)}"
+        )
+
+        nil
+
+      other ->
+        Logger.warning("bot openrouter transport error: #{inspect(other)}")
+        nil
+    end
+  rescue
+    e ->
+      Logger.warning("bot openrouter crash: #{Exception.message(e)}")
+      nil
   end
 
   defp ask_claude(prompt, api_key) do
