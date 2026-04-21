@@ -35,7 +35,10 @@ defmodule Simulator.Client do
       ref: nil,
       join_ref: "1",
       next_ref: 2,
-      joined?: false
+      joined?: false,
+      # Last seen message id we could reply to, and who sent it
+      last_seen_id: nil,
+      last_seen_author: nil
     }
 
     {:ok, state, {:continue, :connect}}
@@ -174,9 +177,38 @@ defmodule Simulator.Client do
     end
   end
 
+  # About 1 in 3 messages is a reply to whoever we last heard from, and about
+  # 1 in 6 @mentions them. This makes the chat read like a conversation
+  # between the sim clients instead of a one-way firehose.
+  @reply_probability 0.33
+  @mention_probability 0.15
+
   defp push_message(state) do
-    body = "#{state.author}/#{state.id}/#{System.unique_integer([:positive])}"
+    should_reply? = state.last_seen_id != nil and :rand.uniform() < @reply_probability
+    should_mention? = state.last_seen_author != nil and :rand.uniform() < @mention_probability
+
+    base = "#{state.author}/#{state.id}/#{System.unique_integer([:positive])}"
+
+    body =
+      cond do
+        should_mention? and should_reply? ->
+          "@#{state.last_seen_author} " <> base
+
+        should_mention? ->
+          "@#{state.last_seen_author} " <> base
+
+        true ->
+          base
+      end
+
     body = pad(body, state.body_size)
+
+    payload =
+      if should_reply? do
+        %{body: body, reply_to_id: state.last_seen_id}
+      else
+        %{body: body}
+      end
 
     frame =
       phoenix_frame(
@@ -184,7 +216,7 @@ defmodule Simulator.Client do
         ref(state),
         "group:" <> state.group,
         "send",
-        %{body: body}
+        payload
       )
 
     case ws_send(state, frame) do
@@ -216,12 +248,16 @@ defmodule Simulator.Client do
       {:data, _ref, data}, acc ->
         case WS.decode(acc.ws, data) do
           {:ok, ws, frames} ->
-            Enum.each(frames, fn
-              {:text, _} -> Simulator.Stats.bump(:received)
-              _ -> :ok
-            end)
+            acc = %{acc | ws: ws}
 
-            %{acc | ws: ws}
+            Enum.reduce(frames, acc, fn
+              {:text, text}, acc ->
+                Simulator.Stats.bump(:received)
+                remember_message(acc, text)
+
+              _, acc ->
+                acc
+            end)
 
           _ ->
             acc
@@ -230,6 +266,18 @@ defmodule Simulator.Client do
       _, acc ->
         acc
     end)
+  end
+
+  # Inspect an incoming WS frame; if it's a chat message from someone else,
+  # stash its id + author so we can reply to it on our next send.
+  defp remember_message(state, text) do
+    with {:ok, [_join_ref, _ref, _topic, "message", payload]} <- Jason.decode(text),
+         %{"id" => id, "author" => author} when is_binary(id) and is_binary(author) <- payload,
+         true <- author != state.author do
+      %{state | last_seen_id: id, last_seen_author: author}
+    else
+      _ -> state
+    end
   end
 
   defp phoenix_frame(join_ref, ref, topic, event, payload) do

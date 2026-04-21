@@ -9,7 +9,10 @@ defmodule Eir.Metrics do
   use GenServer
 
   @table :eir_metrics
+  # Counters tick at 100ms (accurate rates); broadcast throttled to 250ms so
+  # clients don't drown in ~178KB/s per WS. 4Hz is smooth enough visually.
   @tick_ms 100
+  @broadcast_every_n_ticks 3
   @pubsub Eir.PubSub
 
   # Keys we count
@@ -156,7 +159,8 @@ defmodule Eir.Metrics do
        prev: now_counters(),
        prev_at: System.monotonic_time(:millisecond),
        prev_reds: prev_reds,
-       prev_swt: sched_wall_time()
+       prev_swt: sched_wall_time(),
+       tick_n: 0
      }}
   end
 
@@ -179,15 +183,27 @@ defmodule Eir.Metrics do
     rates = Map.put(rates, :reductions, Float.round(reds_per_sec, 0))
     :ets.insert(@table, {:rates, rates})
 
-    # per-scheduler utilization percentages
+    # per-scheduler utilization percentages — trimmed to online schedulers
+    # only (dirty CPU + dirty IO schedulers would bloat the snapshot ~10x)
     curr_swt = sched_wall_time()
-    util = sched_util(state.prev_swt, curr_swt)
+    util =
+      sched_util(state.prev_swt, curr_swt)
+      |> Enum.take(:erlang.system_info(:schedulers_online))
+
     :ets.insert(@table, {:schedulers_util, util})
 
-    snap = snapshot()
-    Phoenix.PubSub.broadcast!(@pubsub, "metrics:live", {:metrics_tick, snap})
+    # broadcast only every Nth tick so 4 replicas × 100ms doesn't drown the
+    # client in ~180KB/s of JSON. Counters still update every tick; the
+    # dashboard just sees 4Hz updates instead of 10Hz.
+    tick_n = rem(state.tick_n + 1, @broadcast_every_n_ticks)
 
-    {:noreply, %{state | prev: curr, prev_at: now_at, prev_reds: total_reds, prev_swt: curr_swt}}
+    if tick_n == 0 do
+      snap = snapshot()
+      Phoenix.PubSub.broadcast!(@pubsub, "metrics:live", {:metrics_tick, snap})
+    end
+
+    {:noreply,
+     %{state | prev: curr, prev_at: now_at, prev_reds: total_reds, prev_swt: curr_swt, tick_n: tick_n}}
   end
 
   @impl true

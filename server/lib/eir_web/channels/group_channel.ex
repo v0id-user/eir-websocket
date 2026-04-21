@@ -38,10 +38,24 @@ defmodule EirWeb.GroupChannel do
     {:reply, :ok, socket}
   end
 
+  # If this channel's mailbox is more than this behind, we drop broadcasts
+  # rather than pile them up unboundedly. Otherwise a slow browser anywhere
+  # in the cluster can pin hundreds of MBs of RAM across the channel process.
+  @max_mailbox_for_broadcast 500
+
   @impl true
   def handle_info({:chat_message, wire}, socket) do
-    push(socket, "message", wire)
-    {:noreply, socket}
+    case Process.info(self(), :message_queue_len) do
+      {:message_queue_len, n} when n > @max_mailbox_for_broadcast ->
+        # Drop — client is too far behind. They'll catch up on reload via
+        # history API.
+        :telemetry.execute([:eir, :channel, :dropped], %{count: 1}, %{queue_len: n})
+        {:noreply, socket}
+
+      _ ->
+        push(socket, "message", wire)
+        {:noreply, socket}
+    end
   end
 
   def handle_info(:after_join, socket) do
