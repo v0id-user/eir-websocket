@@ -168,6 +168,12 @@ export function Dashboard() {
         </Panel>
       </div>
 
+      <div style={{ marginTop: 12 }}>
+        <Panel title="ingest heatmap · node × group">
+          <IngestHeatmap byNode={byNode} />
+        </Panel>
+      </div>
+
       <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <Panel title="simulator">
           <SimControls sim={sim} />
@@ -466,6 +472,123 @@ function BarList({ entries }: { entries: [string, number][] }) {
             </span>
           </div>
         ))}
+    </div>
+  );
+}
+
+function IngestHeatmap({ byNode }: { byNode: NodeMap }) {
+  const nodes = Object.entries(byNode).sort();
+  if (nodes.length === 0) {
+    return <div style={{ color: "#555", fontSize: 11 }}>... waiting</div>;
+  }
+
+  // Union of all groups seen across all nodes, sorted alphabetically
+  const groupSet = new Set<string>();
+  for (const [, s] of nodes) {
+    Object.keys(s.ingest_by_group || {}).forEach((g) => groupSet.add(g));
+  }
+  const groups = [...groupSet].sort();
+
+  if (groups.length === 0) {
+    return (
+      <div style={{ color: "#555", fontSize: 11 }}>
+        ... no ingest yet, fire a run to see the cells light up
+      </div>
+    );
+  }
+
+  // Find global max for normalization
+  let max = 0;
+  for (const [, s] of nodes) {
+    for (const v of Object.values(s.ingest_by_group || {})) {
+      if (v > max) max = v;
+    }
+  }
+  max = Math.max(max, 1);
+
+  return (
+    <div style={{ fontSize: 10 }}>
+      <div style={{ color: "#666", marginBottom: 6 }}>
+        messages ingested per (node, group) since last reset. each cell is the count;
+        color intensity relative to global max.
+      </div>
+      <div style={{ overflow: "auto" }}>
+        <table
+          style={{
+            borderCollapse: "collapse",
+            fontSize: 10,
+            fontFamily: "inherit",
+          }}
+        >
+          <thead>
+            <tr>
+              <th
+                style={{
+                  textAlign: "left",
+                  color: "#666",
+                  padding: "2px 6px",
+                  borderBottom: "1px solid #222",
+                }}
+              >
+                node
+              </th>
+              {groups.map((g) => (
+                <th
+                  key={g}
+                  style={{
+                    color: "#888",
+                    padding: "2px 6px",
+                    borderBottom: "1px solid #222",
+                    fontWeight: "normal",
+                    minWidth: 50,
+                  }}
+                >
+                  {g}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {nodes.map(([name, s]) => (
+              <tr key={name}>
+                <td
+                  style={{
+                    color: "#888",
+                    padding: "2px 6px",
+                    borderRight: "1px solid #222",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {shortNode(name)}
+                </td>
+                {groups.map((g) => {
+                  const v = s.ingest_by_group?.[g] || 0;
+                  const pct = v / max;
+                  const lightness = 5 + Math.round(pct * 55);
+                  const bg =
+                    v === 0 ? "#0f0f0f" : `hsl(120, ${Math.round(pct * 100)}%, ${lightness}%)`;
+                  return (
+                    <td
+                      key={g}
+                      title={`${name} · ${g}: ${v}`}
+                      style={{
+                        background: bg,
+                        color: v === 0 ? "#333" : "#e0e0e0",
+                        padding: "4px 6px",
+                        textAlign: "center",
+                        border: "1px solid #1a1a1a",
+                        minWidth: 50,
+                      }}
+                    >
+                      {fmt(v)}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

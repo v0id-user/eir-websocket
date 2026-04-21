@@ -17,6 +17,7 @@ export type Snapshot = {
   counters: Record<string, number>;
   rates: Record<string, number>;
   cache: { total: number; groups: Record<string, number> };
+  ingest_by_group: Record<string, number>;
   pipeline: { queue_depth: number };
   system: {
     processes: number;

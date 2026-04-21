@@ -21,6 +21,8 @@ defmodule Eir.Metrics do
     :sim_tick
   ]
 
+  @group_counter_table :eir_group_counters
+
   # Public ----------------------------------------------------------------
 
   def start_link(_), do: GenServer.start_link(__MODULE__, [], name: __MODULE__)
@@ -63,6 +65,7 @@ defmodule Eir.Metrics do
         groups: cache_groups(),
         total: Eir.Chat.Cache.total_count()
       },
+      ingest_by_group: ingest_by_group(),
       pipeline: %{
         queue_depth: Eir.Chat.Pipeline.queue_depth()
       },
@@ -78,6 +81,11 @@ defmodule Eir.Metrics do
 
   defp cache_groups do
     :ets.tab2list(:eir_chat_cache_counts)
+    |> Enum.into(%{}, fn {gid, count} -> {gid, count} end)
+  end
+
+  defp ingest_by_group do
+    :ets.tab2list(@group_counter_table)
     |> Enum.into(%{}, fn {gid, count} -> {gid, count} end)
   end
 
@@ -122,6 +130,13 @@ defmodule Eir.Metrics do
   @impl true
   def init(_) do
     :ets.new(@table, [:set, :public, :named_table, write_concurrency: true])
+
+    :ets.new(@group_counter_table, [
+      :set,
+      :public,
+      :named_table,
+      write_concurrency: true
+    ])
 
     for k <- @counters, do: :ets.insert(@table, {k, 0})
     :ets.insert(@table, {:connections, 0})
@@ -180,6 +195,7 @@ defmodule Eir.Metrics do
     for k <- @counters, do: :ets.insert(@table, {k, 0})
     :ets.insert(@table, {:connections, 0})
     :ets.insert(@table, {:rates, %{}})
+    :ets.delete_all_objects(@group_counter_table)
     Eir.Latency.reset()
     {:noreply, %{state | prev: now_counters(), prev_at: System.monotonic_time(:millisecond)}}
   end
@@ -230,6 +246,14 @@ defmodule Eir.Metrics do
         end,
         nil
       )
+    end
+  end
+
+  defp bump_event(:ingest_received, n, metadata) do
+    bump(:ingest_received, n)
+
+    if g = metadata[:group_id] do
+      :ets.update_counter(@group_counter_table, g, {2, n}, {g, 0})
     end
   end
 
