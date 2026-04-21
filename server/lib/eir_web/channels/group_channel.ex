@@ -3,9 +3,15 @@ defmodule EirWeb.GroupChannel do
 
   alias Eir.Chat
 
+  # Phoenix 1.8 routes Broadcasts through handle_out when a default override
+  # is installed by Phoenix.Channel. We intercept presence_diff explicitly so
+  # our handle_out runs. Non-intercepted events fastlane straight to the socket.
+  intercept ["presence_diff"]
+
   @impl true
   def join("group:" <> group_id, _params, socket) do
-    Phoenix.PubSub.subscribe(Eir.PubSub, "group:" <> group_id)
+    # Phoenix.Channel.Server auto-subscribes the channel process to its topic.
+    # Don't subscribe manually — that would double-deliver every message.
 
     {source, wire_messages} = Chat.history(group_id, nil, 50)
     send(self(), :after_join)
@@ -38,11 +44,6 @@ defmodule EirWeb.GroupChannel do
     {:noreply, socket}
   end
 
-  def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff", payload: payload}, socket) do
-    push(socket, "presence_diff", payload)
-    {:noreply, socket}
-  end
-
   def handle_info(:after_join, socket) do
     :telemetry.execute([:eir, :channel, :joined], %{count: 1}, %{
       group_id: socket.assigns.group_id
@@ -55,6 +56,12 @@ defmodule EirWeb.GroupChannel do
       })
 
     push(socket, "presence_state", Eir.Presence.list("group:" <> socket.assigns.group_id))
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_out("presence_diff", payload, socket) do
+    push(socket, "presence_diff", payload)
     {:noreply, socket}
   end
 

@@ -16,12 +16,24 @@ export function Dashboard() {
 
   useEffect(() => {
     const ch = joinMetrics(getNickname());
-    ch.on("snapshot", (payload: Snapshot) => {
-      setByNode((m) => ({ ...m, [payload.node]: payload }));
-    });
-    ch.on("tick", (payload: Snapshot) => {
-      setByNode((m) => ({ ...m, [payload.node]: payload }));
-    });
+    const apply = (payload: Snapshot) => {
+      setByNode((m) => {
+        // Use the freshest snapshot's cluster as ground truth: every node
+        // that isn't currently cluster-connected gets pruned. This makes
+        // the dashboard shrink immediately when you kill a node and grow
+        // back when dns_cluster re-meshes it.
+        const alive = new Set<string>(payload.cluster ?? []);
+        alive.add(payload.node);
+        const next: NodeMap = {};
+        for (const [n, snap] of Object.entries(m)) {
+          if (alive.has(n)) next[n] = snap;
+        }
+        next[payload.node] = payload;
+        return next;
+      });
+    };
+    ch.on("snapshot", apply);
+    ch.on("tick", apply);
     ch.join();
     return () => {
       ch.leave();
@@ -688,19 +700,23 @@ function SchedulersHeatmap({ byNode }: { byNode: NodeMap }) {
   if (nodes.length === 0) {
     return <div style={{ color: "#555", fontSize: 11 }}>... waiting</div>;
   }
-  const maxSchedulers = Math.max(
+
+  // Only show the "normal" schedulers (the ones that matter for regular
+  // work), not dirty-CPU or dirty-IO schedulers. system.schedulers tells us
+  // how many are online; we take that many from the front of schedulers_util.
+  const online = Math.max(
     1,
-    ...nodes.map(([, s]) => s.schedulers_util?.length || 0),
+    ...nodes.map(([, s]) => s.system?.schedulers || 0),
   );
-  const cellW = 18;
+
   return (
     <div style={{ fontSize: 10 }}>
       <div style={{ color: "#666", marginBottom: 6 }}>
-        per-scheduler utilization % · dark=idle → bright=busy
+        per-scheduler utilization % · {online} online schedulers/node · dark=idle → bright=busy
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {nodes.map(([name, s]) => {
-          const cells = s.schedulers_util ?? [];
+          const cells = (s.schedulers_util ?? []).slice(0, online);
           return (
             <div key={name} style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span
@@ -711,24 +727,23 @@ function SchedulersHeatmap({ byNode }: { byNode: NodeMap }) {
                   textOverflow: "ellipsis",
                   whiteSpace: "nowrap",
                   fontSize: 10,
+                  flexShrink: 0,
                 }}
+                title={name}
               >
                 {shortNode(name)}
               </span>
-              <div style={{ display: "flex", gap: 1 }}>
-                {Array.from({ length: maxSchedulers }).map((_, i) => {
-                  const c = cells[i];
+              <div style={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+                {cells.map((c, i) => {
                   const pct = c?.pct ?? 0;
                   const lightness = 5 + Math.round((pct / 100) * 60);
-                  const bg = c
-                    ? `hsl(120, ${Math.round(pct)}%, ${lightness}%)`
-                    : "#111";
+                  const bg = `hsl(120, ${Math.round(pct)}%, ${lightness}%)`;
                   return (
                     <div
                       key={i}
-                      title={c ? `s${c.id}: ${pct.toFixed(1)}%` : "-"}
+                      title={`s${c.id}: ${pct.toFixed(1)}%`}
                       style={{
-                        width: cellW,
+                        width: 18,
                         height: 14,
                         background: bg,
                         border: "1px solid #222",
