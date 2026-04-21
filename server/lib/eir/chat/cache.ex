@@ -20,14 +20,20 @@ defmodule Eir.Chat.Cache do
 
   def start_link(_), do: GenServer.start_link(__MODULE__, [], name: __MODULE__)
 
-  @doc "Insert a message. Safe from any process — hot path, no GenServer call."
+  @doc """
+  Insert a message. Safe from any process — hot path, no GenServer call.
+  Idempotent via :ets.insert_new/2: if the same id arrives again (e.g.
+  the originating node already cached it before broadcasting cluster-wide
+  for sync), we skip the count bump so trim doesn't drift.
+  """
   def put(%Eir.Chat.Message{} = m) do
-    :ets.insert(@table, {{m.group_id, m.id}, m})
-    count = :ets.update_counter(@counts, m.group_id, {2, 1}, {m.group_id, 0})
+    if :ets.insert_new(@table, {{m.group_id, m.id}, m}) do
+      count = :ets.update_counter(@counts, m.group_id, {2, 1}, {m.group_id, 0})
 
-    if count > @max_per_group * 2 do
-      # defer the trim so hot path stays O(1)
-      GenServer.cast(__MODULE__, {:trim, m.group_id})
+      if count > @max_per_group * 2 do
+        # defer the trim so hot path stays O(1)
+        GenServer.cast(__MODULE__, {:trim, m.group_id})
+      end
     end
 
     :ok
@@ -76,6 +82,7 @@ defmodule Eir.Chat.Cache do
     :ets.new(@table, [:ordered_set, :public, :named_table, read_concurrency: true, write_concurrency: true])
     :ets.new(@counts, [:set, :public, :named_table, write_concurrency: true])
     Phoenix.PubSub.subscribe(Eir.PubSub, "eir:reset")
+    Phoenix.PubSub.subscribe(Eir.PubSub, "cache:sync")
     {:ok, %{}}
   end
 
@@ -89,6 +96,14 @@ defmodule Eir.Chat.Cache do
   def handle_info(:reset_local, state) do
     :ets.delete_all_objects(@table)
     :ets.delete_all_objects(@counts)
+    {:noreply, state}
+  end
+
+  def handle_info({:cache_sync, msg}, state) do
+    # Mirror a message into the local cache. Idempotent — the originating
+    # node already put/1'd this exact id, but it doesn't hurt to receive
+    # our own broadcast since insert_new makes it a no-op.
+    put(msg)
     {:noreply, state}
   end
 

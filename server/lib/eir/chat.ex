@@ -43,9 +43,15 @@ defmodule Eir.Chat do
     PubSub.broadcast!(@pubsub, "group:" <> msg.group_id, {:chat_message, wire})
     PubSub.broadcast!(@pubsub, "firehose", {:chat_message, wire})
 
+    # 3. cluster-wide cache sync. Every other replica's Cache GenServer
+    # mirrors the message into its own ETS, so a reload that lands on any
+    # node sees the message immediately even before the async DB write
+    # finishes. Closes the cross-node read-your-writes gap.
+    PubSub.broadcast!(@pubsub, "cache:sync", {:cache_sync, msg})
+
     Eir.Latency.observe(:broadcast, System.monotonic_time(:microsecond) - t0)
 
-    # 3. async persistence — carries t0 so the batcher can compute persist latency
+    # 4. async persistence — carries t0 so the batcher can compute persist latency
     Pipeline.push(msg, t0)
 
     msg

@@ -33,11 +33,13 @@ if config_env() == :prod do
   config :eir, Eir.Repo,
     # ssl: true,
     url: database_url,
-    # Default 2 (from 10) so 4 replicas only hold 8 idle Postgres connections
-    # at rest instead of 40. Pool grows to handle bursts via queue_target.
-    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "2"),
+    # Default 5 (from 10). Need enough headroom that Broadway's 2 batchers
+    # + concurrent history reads from channel joins don't queue behind each
+    # other — that was making single-message persists look like they were
+    # failing under any sustained load.
+    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5"),
     queue_target: 200,
-    queue_interval: 1000,
+    queue_interval: 2000,
     # For machines with several cores, consider starting multiple pools of `pool_size`
     # pool_count: 4,
     socket_options: maybe_ipv6
