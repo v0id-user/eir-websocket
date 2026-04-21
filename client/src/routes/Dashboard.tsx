@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type Snapshot, type SimSnapshot, type LatencyHist } from "../lib/api";
 import { joinMetrics } from "../lib/socket";
@@ -7,6 +7,8 @@ import { SOCKET_URL } from "../lib/config";
 
 type NodeMap = Record<string, Snapshot>;
 
+const HISTORY_LEN = 30;
+
 export function Dashboard() {
   const [byNode, setByNode] = useState<NodeMap>({});
   const [sim, setSim] = useState<SimSnapshot | null>(null);
@@ -14,29 +16,54 @@ export function Dashboard() {
     { at: number; in: number; persisted: number }[]
   >([]);
 
+  // rAF-batch incoming metric snapshots: many ticks within a frame collapse
+  // into one setState. With 4 replicas at 3.3Hz we get ~13 events/sec; the
+  // browser's JS allocation churn from re-rendering the whole tree on each
+  // was the main driver of the heap growing 350MB→800MB during long runs.
+  const pendingRef = useRef<Map<string, Snapshot>>(new Map());
+  const aliveRef = useRef<Set<string>>(new Set());
+  const rafRef = useRef<number | null>(null);
+
   useEffect(() => {
     const ch = joinMetrics(getNickname());
-    const apply = (payload: Snapshot) => {
+
+    const flush = () => {
+      rafRef.current = null;
+      const incoming = pendingRef.current;
+      const alive = aliveRef.current;
+      if (incoming.size === 0) return;
+      pendingRef.current = new Map();
+      aliveRef.current = new Set();
+
       setByNode((m) => {
-        // Use the freshest snapshot's cluster as ground truth: every node
-        // that isn't currently cluster-connected gets pruned. This makes
-        // the dashboard shrink immediately when you kill a node and grow
-        // back when dns_cluster re-meshes it.
-        const alive = new Set<string>(payload.cluster ?? []);
-        alive.add(payload.node);
         const next: NodeMap = {};
+        // carry over only nodes that are still alive per the latest cluster
         for (const [n, snap] of Object.entries(m)) {
           if (alive.has(n)) next[n] = snap;
         }
-        next[payload.node] = payload;
+        for (const [n, snap] of incoming) {
+          next[n] = snap;
+        }
         return next;
       });
     };
+
+    const apply = (payload: Snapshot) => {
+      pendingRef.current.set(payload.node, payload);
+      aliveRef.current = new Set(payload.cluster ?? []);
+      aliveRef.current.add(payload.node);
+      if (rafRef.current == null) rafRef.current = requestAnimationFrame(flush);
+    };
+
     ch.on("snapshot", apply);
     ch.on("tick", apply);
     ch.join();
     return () => {
       ch.leave();
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+      pendingRef.current = new Map();
+      aliveRef.current = new Set();
     };
   }, []);
 
@@ -45,10 +72,13 @@ export function Dashboard() {
 
   useEffect(() => {
     if (!agg) return;
-    setHistory((h) => [
-      ...h.slice(-59),
-      { at: agg.at_ms, in: agg.rate_in, persisted: agg.rate_persisted },
-    ]);
+    setHistory((h) => {
+      const next = h.length >= HISTORY_LEN ? h.slice(-(HISTORY_LEN - 1)) : h;
+      return [
+        ...next,
+        { at: agg.at_ms, in: agg.rate_in, persisted: agg.rate_persisted },
+      ];
+    });
   }, [agg?.at_ms]);
 
   useEffect(() => {
@@ -243,7 +273,13 @@ function Stat({
   );
 }
 
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+const Panel = memo(function Panel({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <div style={{ background: "#0a0a0a", border: "1px solid #333" }}>
       <div
@@ -262,9 +298,11 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
       <div style={{ padding: 10 }}>{children}</div>
     </div>
   );
-}
+});
 
-function NodeTable({ byNode }: { byNode: NodeMap }) {
+const NodeTable = memo(NodeTableImpl);
+
+function NodeTableImpl({ byNode }: { byNode: NodeMap }) {
   const nodes = Object.entries(byNode).sort();
   if (nodes.length === 0) {
     return <div style={{ color: "#555", fontSize: 11 }}>... waiting</div>;
@@ -488,7 +526,9 @@ function BarList({ entries }: { entries: [string, number][] }) {
   );
 }
 
-function IngestHeatmap({ byNode }: { byNode: NodeMap }) {
+const IngestHeatmap = memo(IngestHeatmapImpl);
+
+function IngestHeatmapImpl({ byNode }: { byNode: NodeMap }) {
   const nodes = Object.entries(byNode).sort();
   if (nodes.length === 0) {
     return <div style={{ color: "#555", fontSize: 11 }}>... waiting</div>;
@@ -605,7 +645,9 @@ function IngestHeatmap({ byNode }: { byNode: NodeMap }) {
   );
 }
 
-function LatencyPanel({
+const LatencyPanel = memo(LatencyPanelImpl);
+
+function LatencyPanelImpl({
   byNode,
   kind,
 }: {
@@ -695,7 +737,9 @@ function fmtUs(us: number): string {
   return `${(us / 1_000_000).toFixed(2)}s`;
 }
 
-function SchedulersHeatmap({ byNode }: { byNode: NodeMap }) {
+const SchedulersHeatmap = memo(SchedulersHeatmapImpl);
+
+function SchedulersHeatmapImpl({ byNode }: { byNode: NodeMap }) {
   const nodes = Object.entries(byNode).sort();
   if (nodes.length === 0) {
     return <div style={{ color: "#555", fontSize: 11 }}>... waiting</div>;
@@ -807,9 +851,28 @@ function ChaosControls({ byNode }: { byNode: NodeMap }) {
   );
 }
 
+const SIM_PRESETS = [
+  { name: "tiny",   connections: 10,   mps: 2,   duration: 15 },
+  { name: "warm",   connections: 50,   mps: 5,   duration: 20 },
+  { name: "normal", connections: 150,  mps: 8,   duration: 30 },
+  { name: "spicy",  connections: 400,  mps: 10,  duration: 45 },
+  { name: "stress", connections: 800,  mps: 12,  duration: 60 },
+] as const;
+
+const SIM_LIMITS = {
+  connections: { min: 1,  max: 1500 },
+  mps:         { min: 0,  max: 50   },
+  duration:    { min: 1,  max: 180  },
+};
+
+function clamp(n: number, lo: number, hi: number): number {
+  if (Number.isNaN(n)) return lo;
+  return Math.max(lo, Math.min(hi, Math.floor(n)));
+}
+
 function SimControls({ sim }: { sim: SimSnapshot | null }) {
-  const [connections, setConnections] = useState(100);
-  const [mps, setMps] = useState(10);
+  const [connections, setConnections] = useState(150);
+  const [mps, setMps] = useState(8);
   const [duration, setDuration] = useState(30);
   const [status, setStatus] = useState<string>("");
 
@@ -821,16 +884,22 @@ function SimControls({ sim }: { sim: SimSnapshot | null }) {
     queryFn: api.presets,
   });
 
+  function applyPreset(p: typeof SIM_PRESETS[number]) {
+    setConnections(p.connections);
+    setMps(p.mps);
+    setDuration(p.duration);
+    setStatus(`> preset: ${p.name}`);
+  }
+
   async function run() {
+    const c = clamp(connections, SIM_LIMITS.connections.min, SIM_LIMITS.connections.max);
+    const m = clamp(mps, SIM_LIMITS.mps.min, SIM_LIMITS.mps.max);
+    const d = clamp(duration, SIM_LIMITS.duration.min, SIM_LIMITS.duration.max);
+    setConnections(c); setMps(m); setDuration(d);
     setStatus("> starting...");
     try {
-      const r = await api.sim.run({
-        target,
-        connections,
-        msgs_per_sec: mps,
-        duration,
-      });
-      setStatus(r.ok ? "> running" : `> error: ${r.error}`);
+      const r = await api.sim.run({ target, connections: c, msgs_per_sec: m, duration: d });
+      setStatus(r.ok ? `> running ${c}c × ${m}/s × ${d}s` : `> error: ${r.error}`);
     } catch (e) {
       setStatus(`> error: ${(e as Error).message}`);
     }
@@ -853,13 +922,46 @@ function SimControls({ sim }: { sim: SimSnapshot | null }) {
         target:{" "}
         <span style={{ color: "#c0c0c0", wordBreak: "break-all" }}>{target}</span>
       </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+        {SIM_PRESETS.map((p) => (
+          <button
+            key={p.name}
+            onClick={() => applyPreset(p)}
+            disabled={running}
+            title={`${p.connections} conns · ${p.mps}/s · ${p.duration}s`}
+          >
+            [ {p.name} ]
+          </button>
+        ))}
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 6, alignItems: "center" }}>
         <label style={{ color: "#888" }}>connections</label>
-        <input type="number" value={connections} onChange={(e) => setConnections(+e.target.value)} />
+        <input
+          type="number"
+          min={SIM_LIMITS.connections.min}
+          max={SIM_LIMITS.connections.max}
+          value={connections}
+          onChange={(e) => setConnections(+e.target.value)}
+        />
         <label style={{ color: "#888" }}>msgs/sec each</label>
-        <input type="number" value={mps} onChange={(e) => setMps(+e.target.value)} />
+        <input
+          type="number"
+          min={SIM_LIMITS.mps.min}
+          max={SIM_LIMITS.mps.max}
+          value={mps}
+          onChange={(e) => setMps(+e.target.value)}
+        />
         <label style={{ color: "#888" }}>duration (s)</label>
-        <input type="number" value={duration} onChange={(e) => setDuration(+e.target.value)} />
+        <input
+          type="number"
+          min={SIM_LIMITS.duration.min}
+          max={SIM_LIMITS.duration.max}
+          value={duration}
+          onChange={(e) => setDuration(+e.target.value)}
+        />
+      </div>
+      <div style={{ fontSize: 10, color: "#555" }}>
+        max: {SIM_LIMITS.connections.max} conns · {SIM_LIMITS.mps.max}/s · {SIM_LIMITS.duration.max}s
       </div>
       <div style={{ display: "flex", gap: 6 }}>
         <button onClick={run} disabled={running}>[ run ]</button>
