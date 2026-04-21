@@ -20,10 +20,23 @@ export type Snapshot = {
   pipeline: { queue_depth: number };
   system: {
     processes: number;
+    processes_limit: number;
+    ports: number;
+    ports_limit: number;
+    atoms: number;
+    atoms_limit: number;
+    ets_tables: number;
     memory_mb: number;
+    memory_processes_mb: number;
+    memory_binary_mb: number;
+    memory_ets_mb: number;
+    memory_code_mb: number;
     schedulers: number;
     run_queue: number;
-    self_heap_kb: number;
+    reductions_total: number;
+    io_in_mb: number;
+    io_out_mb: number;
+    uptime_s: number;
   };
   connections: number;
 };

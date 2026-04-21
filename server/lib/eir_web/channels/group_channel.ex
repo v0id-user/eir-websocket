@@ -16,9 +16,15 @@ defmodule EirWeb.GroupChannel do
 
   @impl true
   def handle_in("send", %{"body" => body} = params, socket) do
+    author =
+      case params["nickname"] do
+        n when is_binary(n) and n != "" -> n
+        _ -> socket.assigns.nickname
+      end
+
     Chat.ingest(%{
       group_id: socket.assigns.group_id,
-      author: socket.assigns.nickname,
+      author: author,
       body: body,
       reply_to_id: params["reply_to_id"]
     })

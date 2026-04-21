@@ -49,7 +49,10 @@ export function Chat() {
       ch.leave();
       channelRef.current = null;
     };
-  }, [groupId, nick]);
+    // intentionally NOT depending on `nick` — nickname is sent per-message,
+    // so changing it shouldn't tear down the channel + reload history.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupId]);
 
   useEffect(() => {
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
@@ -64,7 +67,7 @@ export function Chat() {
 
   function send() {
     if (!draft.trim() || !channelRef.current) return;
-    channelRef.current.push("send", { body: draft });
+    channelRef.current.push("send", { body: draft, nickname: nick });
     setDraft("");
   }
 

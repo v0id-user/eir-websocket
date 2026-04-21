@@ -1,27 +1,59 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type Snapshot, type SimSnapshot } from "../lib/api";
 import { joinMetrics } from "../lib/socket";
 import { getNickname } from "../lib/nickname";
 import { SOCKET_URL } from "../lib/config";
 
+type NodeMap = Record<string, Snapshot>;
+
 export function Dashboard() {
-  const [live, setLive] = useState<Snapshot | null>(null);
+  const [byNode, setByNode] = useState<NodeMap>({});
   const [sim, setSim] = useState<SimSnapshot | null>(null);
-  const [history, setHistory] = useState<Snapshot[]>([]);
+  const [history, setHistory] = useState<
+    { at: number; in: number; persisted: number; reductions: number }[]
+  >([]);
+  const prevRedsRef = useRef<{ total: number; at: number } | null>(null);
 
   useEffect(() => {
     const ch = joinMetrics(getNickname());
-    ch.on("snapshot", (payload: Snapshot) => setLive(payload));
+    ch.on("snapshot", (payload: Snapshot) => {
+      setByNode((m) => ({ ...m, [payload.node]: payload }));
+    });
     ch.on("tick", (payload: Snapshot) => {
-      setLive(payload);
-      setHistory((h) => [...h.slice(-59), payload]);
+      setByNode((m) => ({ ...m, [payload.node]: payload }));
     });
     ch.join();
     return () => {
       ch.leave();
     };
   }, []);
+
+  // Aggregate across nodes, update history chart tick
+  const agg = useMemo(() => aggregate(byNode), [byNode]);
+
+  useEffect(() => {
+    if (!agg) return;
+    setHistory((h) => {
+      const prev = prevRedsRef.current;
+      const now = agg.at_ms;
+      let redsPerSec = 0;
+      if (prev && now > prev.at) {
+        redsPerSec =
+          ((agg.reductions_total - prev.total) * 1000) / (now - prev.at);
+      }
+      prevRedsRef.current = { total: agg.reductions_total, at: now };
+      return [
+        ...h.slice(-59),
+        {
+          at: now,
+          in: agg.rate_in,
+          persisted: agg.rate_persisted,
+          reductions: redsPerSec,
+        },
+      ];
+    });
+  }, [agg?.at_ms]);
 
   useEffect(() => {
     const t = setInterval(async () => {
@@ -35,7 +67,7 @@ export function Dashboard() {
   }, []);
 
   return (
-    <div style={{ padding: 12, maxWidth: 1400, margin: "0 auto" }}>
+    <div style={{ padding: 12, maxWidth: 1600, margin: "0 auto" }}>
       <div
         style={{
           fontSize: 11,
@@ -43,63 +75,100 @@ export function Dashboard() {
           padding: "4px 8px",
           borderBottom: "1px solid #333",
           marginBottom: 12,
+          display: "flex",
+          justifyContent: "space-between",
         }}
       >
-        /dashboard
+        <span>/dashboard</span>
+        <span>
+          cluster: {Object.keys(byNode).length} node
+          {Object.keys(byNode).length !== 1 ? "s" : ""} . uptime:{" "}
+          {agg ? fmtDuration(agg.uptime_s) : "-"}
+        </span>
       </div>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-          gap: 1,
-          marginBottom: 12,
-          border: "1px solid #333",
-          background: "#333",
-        }}
-      >
-        <Stat label="msgs/sec in" value={fmt(live?.rates?.ingest_received)} />
-        <Stat label="msgs/sec persisted" value={fmt(live?.rates?.batch_persisted)} />
-        <Stat label="queue depth" value={live?.pipeline?.queue_depth ?? "-"} />
-        <Stat label="ws connections" value={live?.connections ?? "-"} />
-        <Stat label="total cached" value={live?.cache?.total ?? "-"} />
-        <Stat label="processes" value={live?.system?.processes ?? "-"} />
-        <Stat label="memory (MB)" value={live?.system?.memory_mb ?? "-"} />
-        <Stat label="run queue" value={live?.system?.run_queue ?? "-"} />
-      </div>
+      <StatGrid>
+        <Stat label="msgs/sec in" value={fmt(agg?.rate_in)} />
+        <Stat label="msgs/sec persisted" value={fmt(agg?.rate_persisted)} />
+        <Stat label="queue depth" value={agg?.queue_depth ?? "-"} />
+        <Stat label="ws connections" value={agg?.connections ?? "-"} />
+        <Stat label="total cached" value={agg?.cache_total ?? "-"} />
+        <Stat
+          label="processes"
+          value={agg ? `${agg.processes}` : "-"}
+          sub={agg ? `of ${fmt(agg.processes_limit)}` : ""}
+        />
+        <Stat
+          label="memory total"
+          value={agg ? `${agg.memory_mb.toFixed(0)}mb` : "-"}
+          sub={
+            agg
+              ? `proc ${agg.memory_processes_mb.toFixed(0)} . bin ${agg.memory_binary_mb.toFixed(0)}`
+              : ""
+          }
+        />
+        <Stat label="run queue" value={agg?.run_queue ?? "-"} />
+      </StatGrid>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div style={{ height: 1 }} />
+
+      <StatGrid>
+        <Stat
+          label="reductions/s"
+          value={fmt(history.at(-1)?.reductions)}
+          sub={agg ? `${fmt(agg.reductions_total)} total` : ""}
+        />
+        <Stat
+          label="atoms"
+          value={agg ? fmt(agg.atoms) : "-"}
+          sub={agg ? `of ${fmt(agg.atoms_limit)}` : ""}
+        />
+        <Stat
+          label="ports"
+          value={agg ? `${agg.ports}` : "-"}
+          sub={agg ? `of ${fmt(agg.ports_limit)}` : ""}
+        />
+        <Stat
+          label="ets tables"
+          value={agg ? `${agg.ets_tables}` : "-"}
+          sub={agg ? `${agg.memory_ets_mb.toFixed(1)}mb` : ""}
+        />
+        <Stat
+          label="binary mem"
+          value={agg ? `${agg.memory_binary_mb.toFixed(1)}mb` : "-"}
+        />
+        <Stat
+          label="code mem"
+          value={agg ? `${agg.memory_code_mb.toFixed(1)}mb` : "-"}
+        />
+        <Stat
+          label="io in/out"
+          value={agg ? `${agg.io_in_mb.toFixed(0)}/${agg.io_out_mb.toFixed(0)}mb` : "-"}
+        />
+        <Stat
+          label="schedulers"
+          value={agg ? `${agg.schedulers}` : "-"}
+        />
+      </StatGrid>
+
+      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
         <Panel title="throughput [60s]">
           <Chart
             history={history}
             series={[
-              { key: "ingest_received", label: "in", color: "#c0c0c0" },
-              { key: "batch_persisted", label: "persisted", color: "#707070" },
+              { key: "in", label: "msgs/s in", color: "#c0c0c0" },
+              { key: "persisted", label: "msgs/s persisted", color: "#707070" },
             ]}
           />
         </Panel>
-        <Panel title="cluster">
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            {(live?.cluster ?? []).map((n) => (
-              <div key={n} style={{ fontSize: 12 }}>
-                <span style={{ color: "#888" }}>[*]</span> {n}
-              </div>
-            ))}
-          </div>
-          <div
-            style={{
-              marginTop: 12,
-              fontSize: 11,
-              color: "#666",
-              borderTop: "1px dotted #333",
-              paddingTop: 6,
-            }}
-          >
-            schedulers online: {live?.system?.schedulers ?? "-"}
-          </div>
+        <Panel title={`nodes [${Object.keys(byNode).length}]`}>
+          <NodeTable byNode={byNode} />
         </Panel>
+      </div>
+
+      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <Panel title="cache by group">
-          <BarList entries={Object.entries(live?.cache?.groups ?? {})} />
+          <BarList entries={Object.entries(agg?.cache_groups ?? {})} />
         </Panel>
         <Panel title="simulator">
           <SimControls sim={sim} />
@@ -109,12 +178,36 @@ export function Dashboard() {
   );
 }
 
-function Stat({ label, value }: { label: string; value: React.ReactNode }) {
+function StatGrid({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ background: "#0a0a0a", padding: "8px 12px" }}>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+        gap: 1,
+        background: "#333",
+        border: "1px solid #333",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: React.ReactNode;
+  sub?: string;
+}) {
+  return (
+    <div style={{ background: "#0a0a0a", padding: "6px 10px", minHeight: 56 }}>
       <div
         style={{
-          fontSize: 10,
+          fontSize: 9,
           color: "#666",
           textTransform: "uppercase",
           letterSpacing: 0.5,
@@ -122,9 +215,10 @@ function Stat({ label, value }: { label: string; value: React.ReactNode }) {
       >
         {label}
       </div>
-      <div style={{ fontSize: 18, color: "#e0e0e0", marginTop: 4, fontWeight: "normal" }}>
-        {value}
-      </div>
+      <div style={{ fontSize: 16, color: "#e0e0e0", marginTop: 2 }}>{value}</div>
+      {sub && (
+        <div style={{ fontSize: 9, color: "#555", marginTop: 1 }}>{sub}</div>
+      )}
     </div>
   );
 }
@@ -145,32 +239,145 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
       >
         {title}
       </div>
-      <div style={{ padding: 12 }}>{children}</div>
+      <div style={{ padding: 10 }}>{children}</div>
     </div>
   );
 }
 
-function fmt(n: number | undefined): string {
+function NodeTable({ byNode }: { byNode: NodeMap }) {
+  const nodes = Object.entries(byNode).sort();
+  if (nodes.length === 0) {
+    return <div style={{ color: "#555", fontSize: 11 }}>... waiting</div>;
+  }
+  return (
+    <div style={{ fontSize: 11 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr",
+          color: "#666",
+          fontSize: 10,
+          padding: "2px 0",
+          borderBottom: "1px solid #222",
+          textTransform: "uppercase",
+        }}
+      >
+        <span>node</span>
+        <span style={{ textAlign: "right" }}>msgs/s</span>
+        <span style={{ textAlign: "right" }}>conns</span>
+        <span style={{ textAlign: "right" }}>procs</span>
+        <span style={{ textAlign: "right" }}>mem</span>
+      </div>
+      {nodes.map(([name, s]) => (
+        <div
+          key={name}
+          style={{
+            display: "grid",
+            gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr",
+            padding: "3px 0",
+            borderBottom: "1px dotted #1a1a1a",
+          }}
+        >
+          <span style={{ color: "#c0c0c0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {name}
+          </span>
+          <span style={{ textAlign: "right", color: "#a0a0a0" }}>
+            {fmt(s.rates?.ingest_received)}
+          </span>
+          <span style={{ textAlign: "right", color: "#a0a0a0" }}>
+            {s.connections ?? 0}
+          </span>
+          <span style={{ textAlign: "right", color: "#a0a0a0" }}>
+            {s.system?.processes ?? 0}
+          </span>
+          <span style={{ textAlign: "right", color: "#a0a0a0" }}>
+            {s.system?.memory_mb?.toFixed(0) ?? 0}mb
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function fmt(n: number | undefined | null): string {
   if (n == null) return "-";
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}b`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`;
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return n.toString();
+  if (Number.isInteger(n)) return n.toString();
+  return n.toFixed(1);
+}
+
+function fmtDuration(s: number): string {
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
+function aggregate(byNode: NodeMap) {
+  const nodes = Object.values(byNode);
+  if (nodes.length === 0) return null;
+
+  const sum = (f: (s: Snapshot) => number) =>
+    nodes.reduce((a, s) => a + (f(s) || 0), 0);
+  const max = (f: (s: Snapshot) => number) =>
+    nodes.reduce((a, s) => Math.max(a, f(s) || 0), 0);
+
+  const cacheGroups: Record<string, number> = {};
+  for (const s of nodes) {
+    for (const [g, c] of Object.entries(s.cache?.groups || {})) {
+      cacheGroups[g] = (cacheGroups[g] || 0) + c;
+    }
+  }
+
+  const last = nodes.reduce((a, s) => (s.at_ms > a.at_ms ? s : a), nodes[0]);
+
+  return {
+    at_ms: last.at_ms,
+    rate_in: sum((s) => s.rates?.ingest_received || 0),
+    rate_persisted: sum((s) => s.rates?.batch_persisted || 0),
+    queue_depth: sum((s) => s.pipeline?.queue_depth || 0),
+    connections: sum((s) => s.connections || 0),
+    cache_total: sum((s) => s.cache?.total || 0),
+    cache_groups: cacheGroups,
+    processes: sum((s) => s.system?.processes || 0),
+    processes_limit: max((s) => s.system?.processes_limit || 0),
+    atoms: max((s) => s.system?.atoms || 0),
+    atoms_limit: max((s) => s.system?.atoms_limit || 0),
+    ports: sum((s) => s.system?.ports || 0),
+    ports_limit: max((s) => s.system?.ports_limit || 0),
+    ets_tables: sum((s) => s.system?.ets_tables || 0),
+    memory_mb: sum((s) => s.system?.memory_mb || 0),
+    memory_processes_mb: sum((s) => s.system?.memory_processes_mb || 0),
+    memory_binary_mb: sum((s) => s.system?.memory_binary_mb || 0),
+    memory_ets_mb: sum((s) => s.system?.memory_ets_mb || 0),
+    memory_code_mb: sum((s) => s.system?.memory_code_mb || 0),
+    schedulers: max((s) => s.system?.schedulers || 0),
+    run_queue: sum((s) => s.system?.run_queue || 0),
+    reductions_total: sum((s) => s.system?.reductions_total || 0),
+    io_in_mb: sum((s) => s.system?.io_in_mb || 0),
+    io_out_mb: sum((s) => s.system?.io_out_mb || 0),
+    uptime_s: max((s) => s.system?.uptime_s || 0),
+  };
 }
 
 function Chart({
   history,
   series,
 }: {
-  history: Snapshot[];
-  series: { key: string; label: string; color: string }[];
+  history: { at: number; in: number; persisted: number; reductions: number }[];
+  series: { key: "in" | "persisted" | "reductions"; label: string; color: string }[];
 }) {
   const w = 600;
-  const h = 140;
+  const h = 180;
   if (history.length < 2) {
     return <div style={{ color: "#555", fontSize: 12 }}>... gathering data</div>;
   }
   const max = Math.max(
     1,
-    ...history.flatMap((s) => series.map((x) => s.rates?.[x.key] ?? 0)),
+    ...history.flatMap((p) => series.map((x) => p[x.key] || 0)),
   );
   return (
     <svg width="100%" viewBox={`0 0 ${w} ${h}`} style={{ display: "block" }}>
@@ -188,7 +395,7 @@ function Chart({
       ))}
       {series.map((s) => {
         const pts = history.map((snap, i) => {
-          const v = snap.rates?.[s.key] ?? 0;
+          const v = snap[s.key] || 0;
           const x = (i / (history.length - 1)) * w;
           const y = h - (v / max) * h;
           return `${x.toFixed(1)},${y.toFixed(1)}`;
@@ -232,12 +439,7 @@ function BarList({ entries }: { entries: [string, number][] }) {
         .map(([k, v]) => (
           <div
             key={k}
-            style={{
-              fontSize: 11,
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-            }}
+            style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 8 }}
           >
             <span style={{ width: 80, color: "#888" }}>{k}</span>
             <div
@@ -305,49 +507,22 @@ function SimControls({ sim }: { sim: SimSnapshot | null }) {
   }
 
   return (
-    <div
-      style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 12 }}
-    >
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 12 }}>
       <div style={{ color: "#888" }}>
         target:{" "}
-        <span style={{ color: "#c0c0c0", wordBreak: "break-all" }}>
-          {target}
-        </span>
+        <span style={{ color: "#c0c0c0", wordBreak: "break-all" }}>{target}</span>
       </div>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "auto 1fr",
-          gap: 6,
-          alignItems: "center",
-        }}
-      >
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 6, alignItems: "center" }}>
         <label style={{ color: "#888" }}>connections</label>
-        <input
-          type="number"
-          value={connections}
-          onChange={(e) => setConnections(+e.target.value)}
-        />
+        <input type="number" value={connections} onChange={(e) => setConnections(+e.target.value)} />
         <label style={{ color: "#888" }}>msgs/sec each</label>
-        <input
-          type="number"
-          value={mps}
-          onChange={(e) => setMps(+e.target.value)}
-        />
+        <input type="number" value={mps} onChange={(e) => setMps(+e.target.value)} />
         <label style={{ color: "#888" }}>duration (s)</label>
-        <input
-          type="number"
-          value={duration}
-          onChange={(e) => setDuration(+e.target.value)}
-        />
+        <input type="number" value={duration} onChange={(e) => setDuration(+e.target.value)} />
       </div>
       <div style={{ display: "flex", gap: 6 }}>
-        <button onClick={run} disabled={running}>
-          [ run ]
-        </button>
-        <button onClick={stop} disabled={!running}>
-          [ stop ]
-        </button>
+        <button onClick={run} disabled={running}>[ run ]</button>
+        <button onClick={stop} disabled={!running}>[ stop ]</button>
         <button onClick={reset}>[ reset db ]</button>
       </div>
       <div style={{ color: "#666", fontSize: 11, minHeight: 14 }}>{status}</div>
@@ -362,9 +537,7 @@ function SimControls({ sim }: { sim: SimSnapshot | null }) {
             paddingTop: 6,
           }}
         >
-          <span>
-            sent: {sim.counters.sent} . received: {sim.counters.received}
-          </span>
+          <span>sent: {sim.counters.sent} . received: {sim.counters.received}</span>
           <span>
             sent/s: {sim.rates.sent?.toFixed(0) ?? "-"} . recv/s:{" "}
             {sim.rates.received?.toFixed(0) ?? "-"}
@@ -376,9 +549,7 @@ function SimControls({ sim }: { sim: SimSnapshot | null }) {
         </div>
       )}
       {presets && (
-        <div style={{ fontSize: 10, color: "#555" }}>
-          groups: {presets.groups.join(" ")}
-        </div>
+        <div style={{ fontSize: 10, color: "#555" }}>groups: {presets.groups.join(" ")}</div>
       )}
     </div>
   );

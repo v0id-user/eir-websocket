@@ -79,14 +79,30 @@ defmodule Eir.Metrics do
   end
 
   defp system_metrics do
-    {_, mem} = :erlang.process_info(self(), :memory)
+    mem = :erlang.memory()
+    {{:input, input}, {:output, output}} = :erlang.statistics(:io)
+    {total_reds, _} = :erlang.statistics(:reductions)
+    {ms, _} = :erlang.statistics(:wall_clock)
 
     %{
       processes: :erlang.system_info(:process_count),
-      memory_mb: Float.round(:erlang.memory(:total) / 1_024 / 1_024, 1),
+      processes_limit: :erlang.system_info(:process_limit),
+      ports: :erlang.system_info(:port_count),
+      ports_limit: :erlang.system_info(:port_limit),
+      atoms: :erlang.system_info(:atom_count),
+      atoms_limit: :erlang.system_info(:atom_limit),
+      ets_tables: :erlang.system_info(:ets_count),
+      memory_mb: Float.round(mem[:total] / 1_048_576, 1),
+      memory_processes_mb: Float.round(mem[:processes] / 1_048_576, 1),
+      memory_binary_mb: Float.round(mem[:binary] / 1_048_576, 1),
+      memory_ets_mb: Float.round(mem[:ets] / 1_048_576, 1),
+      memory_code_mb: Float.round(mem[:code] / 1_048_576, 1),
       schedulers: :erlang.system_info(:schedulers_online),
       run_queue: :erlang.statistics(:total_run_queue_lengths_all),
-      self_heap_kb: div(mem, 1024)
+      reductions_total: total_reds,
+      io_in_mb: Float.round(input / 1_048_576, 1),
+      io_out_mb: Float.round(output / 1_048_576, 1),
+      uptime_s: div(ms, 1000)
     }
   end
 
