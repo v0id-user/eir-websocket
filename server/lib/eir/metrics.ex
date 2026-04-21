@@ -66,6 +66,10 @@ defmodule Eir.Metrics do
       pipeline: %{
         queue_depth: Eir.Chat.Pipeline.queue_depth()
       },
+      latency: %{
+        broadcast: Eir.Latency.snapshot(:broadcast),
+        persist: Eir.Latency.snapshot(:persist)
+      },
       schedulers_util: schedulers_util,
       system: system_metrics(),
       connections: connection_count()
@@ -176,6 +180,7 @@ defmodule Eir.Metrics do
     for k <- @counters, do: :ets.insert(@table, {k, 0})
     :ets.insert(@table, {:connections, 0})
     :ets.insert(@table, {:rates, %{}})
+    Eir.Latency.reset()
     {:noreply, %{state | prev: now_counters(), prev_at: System.monotonic_time(:millisecond)}}
   end
 

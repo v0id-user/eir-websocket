@@ -39,7 +39,21 @@ export type Snapshot = {
     uptime_s: number;
   };
   schedulers_util: { id: number; pct: number }[];
+  latency: {
+    broadcast: LatencyHist;
+    persist: LatencyHist;
+  };
   connections: number;
+};
+
+export type LatencyHist = {
+  buckets: { le_us: number; count: number }[];
+  count: number;
+  p50_us: number;
+  p99_us: number;
+  p999_us: number;
+  max_us: number;
+  mean_us: number;
 };
 
 export type SimSnapshot = {

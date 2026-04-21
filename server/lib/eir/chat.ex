@@ -30,6 +30,7 @@ defmodule Eir.Chat do
 
   @doc "The hot path. Call this with the message attrs — returns the built message."
   def ingest(%{group_id: _, author: _, body: _} = attrs) do
+    t0 = System.monotonic_time(:microsecond)
     msg = Message.new(attrs)
 
     :telemetry.execute([:eir, :ingest, :received], %{count: 1}, %{group_id: msg.group_id})
@@ -42,8 +43,10 @@ defmodule Eir.Chat do
     PubSub.broadcast!(@pubsub, "group:" <> msg.group_id, {:chat_message, wire})
     PubSub.broadcast!(@pubsub, "firehose", {:chat_message, wire})
 
-    # 3. async persistence
-    Pipeline.push(msg)
+    Eir.Latency.observe(:broadcast, System.monotonic_time(:microsecond) - t0)
+
+    # 3. async persistence — carries t0 so the batcher can compute persist latency
+    Pipeline.push(msg, t0)
 
     msg
   end

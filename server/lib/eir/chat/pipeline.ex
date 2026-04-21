@@ -42,11 +42,14 @@ defmodule Eir.Chat.Pipeline do
   end
 
   @doc "Push a message onto the pipeline. Non-blocking."
-  def push(%Eir.Chat.Message{} = m) do
+  def push(%Eir.Chat.Message{} = m, ingest_t0_us \\ nil) do
     :ets.update_counter(@depth_table, :q, {2, 1}, {:q, 0})
 
     Broadway.push_messages(__MODULE__, [
-      %Message{data: m, acknowledger: Broadway.NoopAcknowledger.init()}
+      %Message{
+        data: {m, ingest_t0_us},
+        acknowledger: Broadway.NoopAcknowledger.init()
+      }
     ])
   end
 
@@ -68,7 +71,8 @@ defmodule Eir.Chat.Pipeline do
 
   @impl Broadway
   def handle_batch(:db, messages, _batch_info, _ctx) do
-    rows = Enum.map(messages, fn %Message{data: m} -> Eir.Chat.Message.to_row(m) end)
+    rows =
+      Enum.map(messages, fn %Message{data: {m, _t0}} -> Eir.Chat.Message.to_row(m) end)
 
     {count, _} =
       Eir.Repo.insert_all(
@@ -78,6 +82,12 @@ defmodule Eir.Chat.Pipeline do
         placeholders: %{},
         returning: false
       )
+
+    now = System.monotonic_time(:microsecond)
+
+    for %Message{data: {_m, t0}} <- messages, is_integer(t0) do
+      Eir.Latency.observe(:persist, now - t0)
+    end
 
     :ets.update_counter(@depth_table, :q, {2, -count}, {:q, 0})
     :telemetry.execute([:eir, :pipeline, :batch_persisted], %{count: count}, %{})

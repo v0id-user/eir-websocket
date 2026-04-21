@@ -4,6 +4,8 @@ defmodule Eir.Application do
 
   @impl true
   def start(_type, _args) do
+    Eir.Latency.init()
+
     children = [
       EirWeb.Telemetry,
       Eir.Repo,
@@ -13,6 +15,7 @@ defmodule Eir.Application do
       Eir.Chat.Cache,
       Eir.Metrics,
       Eir.Chat.Pipeline,
+      Eir.Bot,
       EirWeb.Endpoint
     ]
 

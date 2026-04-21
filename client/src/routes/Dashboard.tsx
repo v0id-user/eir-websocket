@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, type Snapshot, type SimSnapshot } from "../lib/api";
+import { api, type Snapshot, type SimSnapshot, type LatencyHist } from "../lib/api";
 import { joinMetrics } from "../lib/socket";
 import { getNickname } from "../lib/nickname";
 import { SOCKET_URL } from "../lib/config";
@@ -147,6 +147,15 @@ export function Dashboard() {
         </Panel>
         <Panel title={`nodes [${Object.keys(byNode).length}]`}>
           <NodeTable byNode={byNode} />
+        </Panel>
+      </div>
+
+      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <Panel title="latency: ingest → broadcast">
+          <LatencyPanel byNode={byNode} kind="broadcast" />
+        </Panel>
+        <Panel title="latency: ingest → persisted">
+          <LatencyPanel byNode={byNode} kind="persist" />
         </Panel>
       </div>
 
@@ -459,6 +468,96 @@ function BarList({ entries }: { entries: [string, number][] }) {
         ))}
     </div>
   );
+}
+
+function LatencyPanel({
+  byNode,
+  kind,
+}: {
+  byNode: NodeMap;
+  kind: "broadcast" | "persist";
+}) {
+  const nodes = Object.values(byNode);
+  if (nodes.length === 0) {
+    return <div style={{ color: "#555", fontSize: 11 }}>... waiting</div>;
+  }
+
+  // Merge buckets across nodes
+  const bucketMap = new Map<number, number>();
+  let count = 0;
+  let maxUs = 0;
+  let sumP50 = 0,
+    sumP99 = 0,
+    sumP999 = 0,
+    n = 0;
+
+  for (const s of nodes) {
+    const h: LatencyHist | undefined = s.latency?.[kind];
+    if (!h) continue;
+    count += h.count;
+    maxUs = Math.max(maxUs, h.max_us);
+    sumP50 += h.p50_us;
+    sumP99 += h.p99_us;
+    sumP999 += h.p999_us;
+    n += 1;
+    for (const b of h.buckets) {
+      bucketMap.set(b.le_us, (bucketMap.get(b.le_us) || 0) + b.count);
+    }
+  }
+
+  const buckets = Array.from(bucketMap.entries()).sort((a, b) => a[0] - b[0]);
+  const maxCount = Math.max(1, ...buckets.map(([, c]) => c));
+
+  const p50 = n > 0 ? sumP50 / n : 0;
+  const p99 = n > 0 ? sumP99 / n : 0;
+  const p999 = n > 0 ? sumP999 / n : 0;
+
+  return (
+    <div style={{ fontSize: 11 }}>
+      <div style={{ display: "flex", gap: 12, marginBottom: 8, color: "#888" }}>
+        <span>p50 {fmtUs(p50)}</span>
+        <span>p99 {fmtUs(p99)}</span>
+        <span>p999 {fmtUs(p999)}</span>
+        <span>max {fmtUs(maxUs)}</span>
+        <span style={{ marginLeft: "auto" }}>n {fmt(count)}</span>
+      </div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 80 }}>
+        {buckets.map(([edge, c]) => {
+          const h = c === 0 ? 1 : Math.max(1, (c / maxCount) * 80);
+          return (
+            <div
+              key={edge}
+              title={`≤${fmtUs(edge)}: ${c}`}
+              style={{
+                flex: 1,
+                height: h,
+                background: c === 0 ? "#1a1a1a" : "#5a5a5a",
+                border: "1px solid #222",
+              }}
+            />
+          );
+        })}
+      </div>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          marginTop: 2,
+          color: "#555",
+          fontSize: 9,
+        }}
+      >
+        <span>{fmtUs(buckets[0]?.[0] ?? 0)}</span>
+        <span>{fmtUs(buckets[buckets.length - 1]?.[0] ?? 0)}</span>
+      </div>
+    </div>
+  );
+}
+
+function fmtUs(us: number): string {
+  if (us < 1000) return `${us.toFixed(0)}µs`;
+  if (us < 1_000_000) return `${(us / 1000).toFixed(1)}ms`;
+  return `${(us / 1_000_000).toFixed(2)}s`;
 }
 
 function SchedulersHeatmap({ byNode }: { byNode: NodeMap }) {
