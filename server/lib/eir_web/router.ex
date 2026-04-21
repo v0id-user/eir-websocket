@@ -22,6 +22,7 @@ defmodule EirWeb.Router do
     get "/stats", ApiController, :stats
     get "/sim-url", ApiController, :sim_url
     post "/reset", ApiController, :reset
+    post "/chaos", ApiController, :chaos
   end
 
   scope "/", EirWeb do

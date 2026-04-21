@@ -151,11 +151,20 @@ export function Dashboard() {
       </div>
 
       <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <Panel title="schedulers">
+          <SchedulersHeatmap byNode={byNode} />
+        </Panel>
         <Panel title="cache by group">
           <BarList entries={Object.entries(agg?.cache_groups ?? {})} />
         </Panel>
+      </div>
+
+      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <Panel title="simulator">
           <SimControls sim={sim} />
+        </Panel>
+        <Panel title="chaos">
+          <ChaosControls byNode={byNode} />
         </Panel>
       </div>
     </div>
@@ -448,6 +457,115 @@ function BarList({ entries }: { entries: [string, number][] }) {
             </span>
           </div>
         ))}
+    </div>
+  );
+}
+
+function SchedulersHeatmap({ byNode }: { byNode: NodeMap }) {
+  const nodes = Object.entries(byNode).sort();
+  if (nodes.length === 0) {
+    return <div style={{ color: "#555", fontSize: 11 }}>... waiting</div>;
+  }
+  const maxSchedulers = Math.max(
+    1,
+    ...nodes.map(([, s]) => s.schedulers_util?.length || 0),
+  );
+  const cellW = 18;
+  return (
+    <div style={{ fontSize: 10 }}>
+      <div style={{ color: "#666", marginBottom: 6 }}>
+        per-scheduler utilization % · dark=idle → bright=busy
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        {nodes.map(([name, s]) => {
+          const cells = s.schedulers_util ?? [];
+          return (
+            <div key={name} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span
+                style={{
+                  width: 160,
+                  color: "#888",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  fontSize: 10,
+                }}
+              >
+                {shortNode(name)}
+              </span>
+              <div style={{ display: "flex", gap: 1 }}>
+                {Array.from({ length: maxSchedulers }).map((_, i) => {
+                  const c = cells[i];
+                  const pct = c?.pct ?? 0;
+                  const lightness = 5 + Math.round((pct / 100) * 60);
+                  const bg = c
+                    ? `hsl(120, ${Math.round(pct)}%, ${lightness}%)`
+                    : "#111";
+                  return (
+                    <div
+                      key={i}
+                      title={c ? `s${c.id}: ${pct.toFixed(1)}%` : "-"}
+                      style={{
+                        width: cellW,
+                        height: 14,
+                        background: bg,
+                        border: "1px solid #222",
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function shortNode(n: string): string {
+  // turn "eir@fd12:86cf:49cd:1:4000:ca:cf67:79a6" into "…ca:cf67:79a6"
+  const parts = n.split(":");
+  if (parts.length > 3) return "…" + parts.slice(-3).join(":");
+  return n;
+}
+
+function ChaosControls({ byNode }: { byNode: NodeMap }) {
+  const [status, setStatus] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const nodes = Object.keys(byNode).sort();
+
+  async function kill(victim?: string) {
+    setBusy(true);
+    setStatus(`> killing ${victim ?? "random node"}...`);
+    try {
+      const r = await api.chaos(victim);
+      setStatus(`> killed ${r.killed} in ${r.in_ms}ms · railway will auto-restart`);
+    } catch (e) {
+      setStatus(`> error: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 12 }}>
+      <div style={{ color: "#888" }}>
+        kill a replica and watch the cluster heal. railway restarts the
+        container, dns_cluster rejoins it, phoenix.pubsub reconnects. you
+        should see the node drop out of the nodes panel, then reappear.
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <button onClick={() => kill()} disabled={busy || nodes.length === 0}>
+          [ kill random ]
+        </button>
+        {nodes.map((n) => (
+          <button key={n} onClick={() => kill(n)} disabled={busy} title={n}>
+            [ kill {shortNode(n)} ]
+          </button>
+        ))}
+      </div>
+      <div style={{ color: "#666", fontSize: 11, minHeight: 14 }}>{status}</div>
     </div>
   );
 }

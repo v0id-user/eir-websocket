@@ -8,7 +8,7 @@ defmodule EirWeb.GroupChannel do
     Phoenix.PubSub.subscribe(Eir.PubSub, "group:" <> group_id)
 
     {source, wire_messages} = Chat.history(group_id, nil, 50)
-    send(self(), :track_conn)
+    send(self(), :after_join)
 
     {:ok, %{messages: wire_messages, source: source, node: to_string(node())},
      assign(socket, :group_id, group_id)}
@@ -38,11 +38,23 @@ defmodule EirWeb.GroupChannel do
     {:noreply, socket}
   end
 
-  def handle_info(:track_conn, socket) do
+  def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff", payload: payload}, socket) do
+    push(socket, "presence_diff", payload)
+    {:noreply, socket}
+  end
+
+  def handle_info(:after_join, socket) do
     :telemetry.execute([:eir, :channel, :joined], %{count: 1}, %{
       group_id: socket.assigns.group_id
     })
 
+    {:ok, _} =
+      Eir.Presence.track(self(), "group:" <> socket.assigns.group_id, socket.assigns.nickname, %{
+        online_at: System.system_time(:second),
+        node: to_string(node())
+      })
+
+    push(socket, "presence_state", Eir.Presence.list("group:" <> socket.assigns.group_id))
     {:noreply, socket}
   end
 

@@ -9,6 +9,7 @@ defmodule Eir.Application do
       Eir.Repo,
       {DNSCluster, query: Application.get_env(:eir, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Eir.PubSub},
+      Eir.Presence,
       Eir.Chat.Cache,
       Eir.Metrics,
       Eir.Chat.Pipeline,

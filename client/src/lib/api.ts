@@ -38,6 +38,7 @@ export type Snapshot = {
     io_out_mb: number;
     uptime_s: number;
   };
+  schedulers_util: { id: number; pct: number }[];
   connections: number;
 };
 
@@ -69,6 +70,12 @@ export const api = {
   stats: () => fetch(`${SERVER_URL}/api/stats`).then(json<Snapshot>),
   reset: () =>
     fetch(`${SERVER_URL}/api/reset`, { method: "POST" }).then(json<{ ok: boolean }>),
+  chaos: (victim?: string) =>
+    fetch(`${SERVER_URL}/api/chaos`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(victim ? { victim } : {}),
+    }).then(json<{ ok: boolean; killed: string; in_ms: number }>),
   history: (groupId: string, before?: string, limit = 50) => {
     const u = new URL(`${SERVER_URL}/api/groups/${groupId}/messages`);
     if (before) u.searchParams.set("before", before);

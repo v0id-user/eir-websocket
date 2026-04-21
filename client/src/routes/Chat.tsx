@@ -4,13 +4,16 @@ import { useQuery } from "@tanstack/react-query";
 import { api, type Message } from "../lib/api";
 import { joinGroup } from "../lib/socket";
 import { getNickname, setNickname } from "../lib/nickname";
-import type { Channel } from "phoenix";
+import { Presence, type Channel } from "phoenix";
+
+type PresenceUser = { nickname: string; node: string; online_at: number };
 
 export function Chat() {
   const { groupId } = useParams({ from: "/g/$groupId" });
   const nav = useNavigate();
   const [nick, setNick] = useState(getNickname());
   const [messages, setMessages] = useState<Message[]>([]);
+  const [presence, setPresence] = useState<PresenceUser[]>([]);
   const [draft, setDraft] = useState("");
   const [joinedSource, setJoinedSource] = useState<string>("");
   const channelRef = useRef<Channel | null>(null);
@@ -23,14 +26,35 @@ export function Chat() {
 
   useEffect(() => {
     setMessages([]);
+    setPresence([]);
     const ch = joinGroup(nick, groupId);
     channelRef.current = ch;
+
+    let presences: Record<string, { metas: PresenceUser[] }> = {};
+    const sync = () => {
+      const list: PresenceUser[] = [];
+      Presence.list(presences, (nickname, { metas: [first] }) =>
+        list.push({ ...first, nickname }),
+      );
+      list.sort((a, b) => a.online_at - b.online_at);
+      setPresence(list);
+    };
 
     ch.on("message", (m: Message) => {
       setMessages((prev) => {
         if (prev.some((x) => x.id === m.id)) return prev;
         return [...prev, m];
       });
+    });
+
+    ch.on("presence_state", (state) => {
+      presences = Presence.syncState(presences, state);
+      sync();
+    });
+
+    ch.on("presence_diff", (diff) => {
+      presences = Presence.syncDiff(presences, diff);
+      sync();
     });
 
     ch.join()
@@ -49,8 +73,6 @@ export function Chat() {
       ch.leave();
       channelRef.current = null;
     };
-    // intentionally NOT depending on `nick` — nickname is sent per-message,
-    // so changing it shouldn't tear down the channel + reload history.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupId]);
 
@@ -222,7 +244,33 @@ export function Chat() {
             letterSpacing: 0.5,
           }}
         >
-          in view
+          online [{presence.length}]
+        </div>
+        <div style={{ padding: 8 }}>
+          {presence.map((u) => (
+            <div
+              key={u.nickname}
+              style={{ fontSize: 11, padding: "1px 0" }}
+              title={`on ${u.node}`}
+            >
+              <span style={{ color: "#4a8", marginRight: 4 }}>*</span>
+              <span style={{ color: "#a0a0a0" }}>{u.nickname}</span>
+            </div>
+          ))}
+        </div>
+        <div
+          style={{
+            fontSize: 10,
+            color: "#888",
+            textTransform: "uppercase",
+            padding: "4px 10px",
+            borderBottom: "1px solid #333",
+            borderTop: "1px solid #333",
+            background: "#141414",
+            letterSpacing: 0.5,
+          }}
+        >
+          authors in view
         </div>
         <div style={{ padding: 8 }}>
           {byAuthor.map(([a, n]) => (
@@ -235,7 +283,7 @@ export function Chat() {
                 justifyContent: "space-between",
               }}
             >
-              <span style={{ color: "#a0a0a0" }}>{a}</span>
+              <span style={{ color: "#888" }}>{a}</span>
               <span style={{ color: "#555" }}>x{n}</span>
             </div>
           ))}

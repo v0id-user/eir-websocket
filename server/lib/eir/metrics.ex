@@ -47,6 +47,12 @@ defmodule Eir.Metrics do
         [] -> %{}
       end
 
+    schedulers_util =
+      case :ets.lookup(@table, :schedulers_util) do
+        [{:schedulers_util, u}] -> u
+        [] -> []
+      end
+
     %{
       node: to_string(node()),
       cluster: Enum.map([node() | Node.list()], &to_string/1),
@@ -60,6 +66,7 @@ defmodule Eir.Metrics do
       pipeline: %{
         queue_depth: Eir.Chat.Pipeline.queue_depth()
       },
+      schedulers_util: schedulers_util,
       system: system_metrics(),
       connections: connection_count()
     }
@@ -115,8 +122,10 @@ defmodule Eir.Metrics do
     for k <- @counters, do: :ets.insert(@table, {k, 0})
     :ets.insert(@table, {:connections, 0})
     :ets.insert(@table, {:rates, %{}})
+    :ets.insert(@table, {:schedulers_util, []})
 
     attach_telemetry()
+    :erlang.system_flag(:scheduler_wall_time, true)
 
     Phoenix.PubSub.subscribe(@pubsub, "eir:reset")
     :timer.send_interval(@tick_ms, :tick)
@@ -127,7 +136,8 @@ defmodule Eir.Metrics do
      %{
        prev: now_counters(),
        prev_at: System.monotonic_time(:millisecond),
-       prev_reds: prev_reds
+       prev_reds: prev_reds,
+       prev_swt: sched_wall_time()
      }}
   end
 
@@ -148,13 +158,17 @@ defmodule Eir.Metrics do
       end
 
     rates = Map.put(rates, :reductions, Float.round(reds_per_sec, 0))
-
     :ets.insert(@table, {:rates, rates})
+
+    # per-scheduler utilization percentages
+    curr_swt = sched_wall_time()
+    util = sched_util(state.prev_swt, curr_swt)
+    :ets.insert(@table, {:schedulers_util, util})
 
     snap = snapshot()
     Phoenix.PubSub.broadcast!(@pubsub, "metrics:live", {:metrics_tick, snap})
 
-    {:noreply, %{state | prev: curr, prev_at: now_at, prev_reds: total_reds}}
+    {:noreply, %{state | prev: curr, prev_at: now_at, prev_reds: total_reds, prev_swt: curr_swt}}
   end
 
   @impl true
@@ -173,6 +187,25 @@ defmodule Eir.Metrics do
       end
     end)
   end
+
+  defp sched_wall_time do
+    case :erlang.statistics(:scheduler_wall_time_all) do
+      :undefined -> []
+      list -> Enum.sort(list)
+    end
+  end
+
+  defp sched_util(prev, curr) when length(prev) == length(curr) do
+    Enum.zip(prev, curr)
+    |> Enum.map(fn {{id, a0, t0}, {id, a1, t1}} ->
+      da = a1 - a0
+      dt = t1 - t0
+      pct = if dt > 0, do: Float.round(da * 100 / dt, 1), else: 0.0
+      %{id: id, pct: pct}
+    end)
+  end
+
+  defp sched_util(_prev, _curr), do: []
 
   defp attach_telemetry do
     events = [

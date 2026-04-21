@@ -30,6 +30,35 @@ defmodule EirWeb.ApiController do
     json(conn, %{url: url})
   end
 
+  def chaos(conn, params) do
+    # Pick a node and force it down. Railway auto-restarts within ~seconds.
+    # If `victim` is passed and matches a node, use it; otherwise random.
+    all = [node() | Node.list()]
+
+    target =
+      case params["victim"] do
+        v when is_binary(v) ->
+          Enum.find(all, fn n -> to_string(n) == v end) || Enum.random(all)
+
+        _ ->
+          Enum.random(all)
+      end
+
+    delay_ms = 500
+
+    spawn(fn ->
+      Process.sleep(delay_ms)
+
+      if target == node() do
+        :init.stop(1)
+      else
+        :erpc.call(target, :init, :stop, [1], 1000)
+      end
+    end)
+
+    json(conn, %{ok: true, killed: to_string(target), in_ms: delay_ms})
+  end
+
   defp parse_int(nil, default), do: default
   defp parse_int(n, _) when is_integer(n), do: n
 
