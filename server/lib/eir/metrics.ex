@@ -121,7 +121,7 @@ defmodule Eir.Metrics do
     Phoenix.PubSub.subscribe(@pubsub, "eir:reset")
     :timer.send_interval(@tick_ms, :tick)
 
-    {:reds, prev_reds} = :erlang.statistics(:reductions)
+    {prev_reds, _} = :erlang.statistics(:reductions)
 
     {:ok,
      %{
