@@ -10,24 +10,28 @@ import { Chat } from "./routes/Chat";
 
 const rootRoute = createRootRoute({
   component: () => (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "#0a0a0a",
-        color: "#eee",
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-      }}
-    >
+    <div style={{ minHeight: "100vh", background: "#111", color: "#c0c0c0" }}>
       <nav
         style={{
           display: "flex",
-          gap: 16,
-          padding: "10px 20px",
-          borderBottom: "1px solid #222",
+          gap: 0,
+          padding: 0,
+          borderBottom: "1px solid #333",
           alignItems: "center",
+          background: "#0a0a0a",
         }}
       >
-        <strong style={{ color: "#4ade80" }}>eir</strong>
+        <span
+          style={{
+            padding: "6px 12px",
+            borderRight: "1px solid #333",
+            color: "#c0c0c0",
+            letterSpacing: 1,
+            fontSize: 12,
+          }}
+        >
+          [ eir ]
+        </span>
         <Link to="/" style={linkStyle} activeProps={{ style: activeLinkStyle }}>
           dashboard
         </Link>
@@ -39,8 +43,16 @@ const rootRoute = createRootRoute({
         >
           chat
         </Link>
-        <span style={{ marginLeft: "auto", color: "#666", fontSize: 12 }}>
-          elixir · phoenix · broadway · ets · pubsub
+        <span
+          style={{
+            marginLeft: "auto",
+            padding: "6px 12px",
+            color: "#666",
+            fontSize: 11,
+            borderLeft: "1px solid #333",
+          }}
+        >
+          elixir . phoenix . broadway . ets . pubsub
         </span>
       </nav>
       <Outlet />
@@ -71,11 +83,14 @@ declare module "@tanstack/react-router" {
 }
 
 const linkStyle: React.CSSProperties = {
-  color: "#aaa",
+  color: "#888",
   textDecoration: "none",
-  fontSize: 13,
+  fontSize: 12,
+  padding: "6px 12px",
+  borderRight: "1px solid #333",
 };
 
 const activeLinkStyle: React.CSSProperties = {
-  color: "#4ade80",
+  color: "#fff",
+  background: "#1a1a1a",
 };

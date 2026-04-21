@@ -34,10 +34,13 @@ export function Chat() {
     });
 
     ch.join()
-      .receive("ok", (resp: { messages: Message[]; source: string; node: string }) => {
-        setJoinedSource(`${resp.source} · ${resp.node}`);
-        setMessages(resp.messages);
-      })
+      .receive(
+        "ok",
+        (resp: { messages: Message[]; source: string; node: string }) => {
+          setJoinedSource(`${resp.source} . ${resp.node}`);
+          setMessages(resp.messages);
+        },
+      )
       .receive("error", (err) => {
         console.error("join error", err);
       });
@@ -72,76 +75,109 @@ export function Chat() {
   }, [messages]);
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "200px 1fr 200px", height: "calc(100vh - 48px)" }}>
-      <aside style={{ borderRight: "1px solid #222", padding: 12, overflow: "auto" }}>
-        <div style={{ fontSize: 11, color: "#888", textTransform: "uppercase", marginBottom: 8 }}>
-          groups
-        </div>
-        {presets?.groups?.map((g) => (
-          <div
-            key={g}
-            onClick={() => nav({ to: "/g/$groupId", params: { groupId: g } })}
-            style={{
-              padding: "6px 8px",
-              cursor: "pointer",
-              borderRadius: 4,
-              background: g === groupId ? "#1a2e1a" : "transparent",
-              color: g === groupId ? "#4ade80" : "#aaa",
-              fontSize: 13,
-            }}
-          >
-            # {g}
-          </div>
-        ))}
-      </aside>
-
-      <section style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "180px 1fr 180px",
+        height: "calc(100vh - 32px)",
+      }}
+    >
+      <aside
+        style={{
+          borderRight: "1px solid #333",
+          background: "#0a0a0a",
+          overflow: "auto",
+        }}
+      >
         <div
           style={{
-            padding: "8px 16px",
-            borderBottom: "1px solid #222",
-            fontSize: 13,
+            fontSize: 10,
             color: "#888",
+            textTransform: "uppercase",
+            padding: "4px 10px",
+            borderBottom: "1px solid #333",
+            background: "#141414",
+            letterSpacing: 0.5,
           }}
         >
-          <strong style={{ color: "#4ade80" }}># {groupId}</strong>
-          <span style={{ marginLeft: 12 }}>
-            {messages.length} loaded · {joinedSource}
-          </span>
+          groups
+        </div>
+        <div style={{ padding: 6 }}>
+          {presets?.groups?.map((g) => (
+            <div
+              key={g}
+              onClick={() => nav({ to: "/g/$groupId", params: { groupId: g } })}
+              style={{
+                padding: "3px 8px",
+                cursor: "pointer",
+                background: g === groupId ? "#1a1a1a" : "transparent",
+                color: g === groupId ? "#fff" : "#888",
+                fontSize: 12,
+                borderLeft:
+                  g === groupId ? "2px solid #666" : "2px solid transparent",
+              }}
+            >
+              #{g}
+            </div>
+          ))}
+        </div>
+      </aside>
+
+      <section
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          minHeight: 0,
+          background: "#0a0a0a",
+        }}
+      >
+        <div
+          style={{
+            padding: "4px 12px",
+            borderBottom: "1px solid #333",
+            fontSize: 11,
+            color: "#888",
+            background: "#141414",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <strong style={{ color: "#c0c0c0", fontWeight: "normal" }}>
+            #{groupId}
+          </strong>
+          <span>{messages.length} loaded</span>
+          <span>. {joinedSource}</span>
           <button
             onClick={loadMore}
-            style={{
-              marginLeft: 12,
-              background: "transparent",
-              border: "1px solid #333",
-              color: "#aaa",
-              padding: "2px 8px",
-              fontSize: 11,
-              borderRadius: 3,
-              cursor: "pointer",
-            }}
+            style={{ marginLeft: "auto", fontSize: 10, padding: "2px 6px" }}
           >
-            ↑ load older
+            [ load older ]
           </button>
         </div>
-        <div ref={scrollerRef} style={{ flex: 1, overflow: "auto", padding: 16 }}>
+        <div
+          ref={scrollerRef}
+          style={{ flex: 1, overflow: "auto", padding: "8px 12px" }}
+        >
           {messages.map((m) => (
-            <div key={m.id} style={{ marginBottom: 4, fontSize: 13 }}>
-              <span style={{ color: "#60a5fa" }}>{m.author}</span>{" "}
+            <div key={m.id} style={{ marginBottom: 2, fontSize: 12 }}>
               <span style={{ color: "#555", fontSize: 10 }}>
                 {m.id.slice(0, 8)}
               </span>{" "}
+              <span style={{ color: "#a0a0a0" }}>{m.author}</span>{" "}
+              <span style={{ color: "#555" }}>:</span>{" "}
               <span>{m.body}</span>
             </div>
           ))}
         </div>
         <div
           style={{
-            borderTop: "1px solid #222",
-            padding: 10,
+            borderTop: "1px solid #333",
+            padding: 6,
             display: "flex",
-            gap: 8,
+            gap: 6,
             alignItems: "center",
+            background: "#141414",
           }}
         >
           <input
@@ -150,16 +186,7 @@ export function Chat() {
               setNick(e.target.value);
               setNickname(e.target.value);
             }}
-            style={{
-              width: 100,
-              background: "#0a0a0a",
-              color: "#eee",
-              border: "1px solid #333",
-              padding: "4px 8px",
-              fontFamily: "inherit",
-              fontSize: 13,
-              borderRadius: 4,
-            }}
+            style={{ width: 90 }}
           />
           <input
             value={draft}
@@ -167,46 +194,49 @@ export function Chat() {
             onKeyDown={(e) => {
               if (e.key === "Enter") send();
             }}
-            placeholder={`message #${groupId}`}
-            style={{
-              flex: 1,
-              background: "#0a0a0a",
-              color: "#eee",
-              border: "1px solid #333",
-              padding: "6px 10px",
-              fontFamily: "inherit",
-              fontSize: 13,
-              borderRadius: 4,
-            }}
+            placeholder={`> #${groupId}`}
+            style={{ flex: 1 }}
           />
-          <button
-            onClick={send}
-            style={{
-              background: "#1a2e1a",
-              color: "#4ade80",
-              border: "1px solid #2a4a2a",
-              padding: "6px 14px",
-              borderRadius: 4,
-              cursor: "pointer",
-              fontFamily: "inherit",
-              fontSize: 13,
-            }}
-          >
-            send
-          </button>
+          <button onClick={send}>[ send ]</button>
         </div>
       </section>
 
-      <aside style={{ borderLeft: "1px solid #222", padding: 12, overflow: "auto" }}>
-        <div style={{ fontSize: 11, color: "#888", textTransform: "uppercase", marginBottom: 8 }}>
+      <aside
+        style={{
+          borderLeft: "1px solid #333",
+          background: "#0a0a0a",
+          overflow: "auto",
+        }}
+      >
+        <div
+          style={{
+            fontSize: 10,
+            color: "#888",
+            textTransform: "uppercase",
+            padding: "4px 10px",
+            borderBottom: "1px solid #333",
+            background: "#141414",
+            letterSpacing: 0.5,
+          }}
+        >
           in view
         </div>
-        {byAuthor.map(([a, n]) => (
-          <div key={a} style={{ fontSize: 12, color: "#aaa", padding: "2px 0" }}>
-            <span style={{ color: "#60a5fa" }}>{a}</span>{" "}
-            <span style={{ color: "#555" }}>×{n}</span>
-          </div>
-        ))}
+        <div style={{ padding: 8 }}>
+          {byAuthor.map(([a, n]) => (
+            <div
+              key={a}
+              style={{
+                fontSize: 11,
+                padding: "1px 0",
+                display: "flex",
+                justifyContent: "space-between",
+              }}
+            >
+              <span style={{ color: "#a0a0a0" }}>{a}</span>
+              <span style={{ color: "#555" }}>x{n}</span>
+            </div>
+          ))}
+        </div>
       </aside>
     </div>
   );
