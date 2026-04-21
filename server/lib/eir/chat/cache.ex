@@ -14,7 +14,7 @@ defmodule Eir.Chat.Cache do
 
   @table :eir_chat_cache
   @counts :eir_chat_cache_counts
-  @max_per_group 500
+  @max_per_group 200
 
   # Public API ------------------------------------------------------------
 
