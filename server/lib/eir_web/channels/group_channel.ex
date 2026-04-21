@@ -3,6 +3,9 @@ defmodule EirWeb.GroupChannel do
 
   alias Eir.Chat
 
+  @max_nickname_bytes 64
+  @max_body_bytes 2_000
+
   # Phoenix 1.8 routes Broadcasts through handle_out when a default override
   # is installed by Phoenix.Channel. We intercept presence_diff explicitly so
   # our handle_out runs. Non-intercepted events fastlane straight to the socket.
@@ -21,22 +24,64 @@ defmodule EirWeb.GroupChannel do
   end
 
   @impl true
-  def handle_in("send", %{"body" => body} = params, socket) do
-    author =
-      case params["nickname"] do
-        n when is_binary(n) and n != "" -> n
-        _ -> socket.assigns.nickname
-      end
+  def handle_in("send", %{"body" => body} = params, socket) when is_binary(body) do
+    if byte_size(body) > @max_body_bytes do
+      {:reply, {:error, %{reason: "body_too_large"}}, socket}
+    else
+      author = pick_author(params, socket)
 
-    Chat.ingest(%{
-      group_id: socket.assigns.group_id,
-      author: author,
-      body: body,
-      reply_to_id: params["reply_to_id"]
-    })
+      Chat.ingest(%{
+        group_id: socket.assigns.group_id,
+        author: author,
+        body: body,
+        reply_to_id: params["reply_to_id"]
+      })
 
-    {:reply, :ok, socket}
+      {:reply, :ok, socket}
+    end
   end
+
+  def handle_in("set_nick", %{"nickname" => raw}, socket) when is_binary(raw) do
+    case trimmed_nick(raw) do
+      "" ->
+        {:reply, {:error, %{reason: "empty"}}, socket}
+
+      new_nick ->
+        # Untrack our old presence entry and re-track with the new name so
+        # everyone sees the change. Leaves metadata under the old key; the
+        # Presence CRDT propagates the swap to all nodes.
+        old = socket.assigns.nickname
+        topic = "group:" <> socket.assigns.group_id
+        Eir.Presence.untrack(self(), topic, old)
+
+        {:ok, _} =
+          Eir.Presence.track(self(), topic, new_nick, %{
+            online_at: System.system_time(:second),
+            node: to_string(node())
+          })
+
+        {:reply, :ok, assign(socket, :nickname, new_nick)}
+    end
+  end
+
+  defp pick_author(params, socket) do
+    case trimmed_nick(params["nickname"]) do
+      "" -> socket.assigns.nickname
+      n -> n
+    end
+  end
+
+  defp trimmed_nick(n) when is_binary(n) do
+    trimmed = String.trim(n)
+
+    cond do
+      trimmed == "" -> ""
+      byte_size(trimmed) > @max_nickname_bytes -> binary_part(trimmed, 0, @max_nickname_bytes)
+      true -> trimmed
+    end
+  end
+
+  defp trimmed_nick(_), do: ""
 
   # If this channel's mailbox is more than this behind, we drop broadcasts
   # rather than pile them up unboundedly. Otherwise a slow browser anywhere

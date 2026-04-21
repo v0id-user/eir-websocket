@@ -15,6 +15,7 @@ defmodule Eir.Application do
       Eir.Chat.Cache,
       Eir.Metrics,
       Eir.Chat.Pipeline,
+      {Task.Supervisor, name: Eir.Bot.TaskSup},
       Eir.Bot,
       EirWeb.Endpoint
     ]

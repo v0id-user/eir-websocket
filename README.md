@@ -1,89 +1,120 @@
 # eir-websocket
 
-A Discord-shaped rig for pushing Elixir/BEAM to the edge and watching it grin.
-You fire simulated clients at a Phoenix server, the server fans out broadcasts
-across a cluster, batches inserts to Postgres, and streams live metrics to a
-React dashboard so you can watch the numbers move in real time.
+A Discord-shaped rig for pushing Elixir/BEAM. You fire simulated clients at a
+Phoenix cluster, the cluster fans out broadcasts across all replicas, batches
+inserts into Postgres, and streams live metrics to a React dashboard that
+shows exactly what the BEAM is doing while it runs.
 
-This is a playground, not a product. The goal is to see what BEAM actually does
-when you throw a few thousand WebSocket connections at it.
+Playground, not a product. The point is to see the numbers.
 
-## The three services
+## The four things
 
-### server (Elixir, Phoenix 1.8)
+### server (Elixir, Phoenix 1.8) — the actual demo
 
-The star of the show. Every inbound message hits the same hot path:
+Every inbound message hits one hot path:
 
-1. A UUIDv7 id is minted at ingest so the same id lives in cache, DB, and on
-   the wire. Cursor pagination and reply refs are trivial because of this.
-2. The message goes into a per-group `ordered_set` ETS ring buffer (500 msgs
-   per group) for sub-millisecond recent-history reads.
-3. A `Phoenix.PubSub` broadcast fans it out to every subscribed process across
-   the cluster. With `dns_cluster` wiring nodes up automatically, a message
-   posted on node A reaches subscribers on node B transparently.
-4. `Broadway.push_messages/2` hands it to an async pipeline that batches up to
-   1000 messages or 200ms (whichever comes first) into one `Repo.insert_all`.
-5. `:telemetry.execute` bumps a counter that the metrics GenServer samples
-   every 100ms and broadcasts on a `metrics:live` channel.
+1. UUIDv7 is minted at ingest. Same id in ETS cache, wire format, and
+   Postgres `:uuid` column, so cursor pagination and reply refs stay trivial.
+2. The message goes into a per-group `ordered_set` ETS ring buffer, 200
+   messages per group. Sub-millisecond recent-history reads.
+3. `Phoenix.PubSub` distributed broadcast. With `dns_cluster` auto-meshing
+   the 4 Railway replicas over IPv6, a message posted on node A reaches
+   every subscribed process on every other node.
+4. `Broadway.push_messages/2` hands the message to an async pipeline that
+   batches up to 1000 messages or 200ms and does one `Repo.insert_all`.
+5. `:telemetry.execute` bumps counters the metrics GenServer samples every
+   100ms and broadcasts on a throttled `metrics:live` channel.
 
-History reads are cache-first: a partial cache hit tops up from Postgres, a
-miss falls through. Same ULID cursor on both sides so the two layers stay
-in sync without any extra bookkeeping.
+Extras in the server:
+- `Phoenix.Presence` on every group channel. CRDT-backed roster across the
+  cluster.
+- `Eir.Bot` subscribes to every group. When a message contains `@bot`, the
+  leader-elected bot (lowest node name in the cluster) replies via
+  `Chat.ingest/1` with a `reply_to_id` pointing at the triggering message.
+  Uses OpenRouter if `OPENROUTER_API_KEY` is set, Anthropic if
+  `ANTHROPIC_API_KEY` is set, canned responses otherwise.
+- `Eir.Latency` keeps a log-bucketed histogram (64µs to ~8s) for two spans:
+  ingest to broadcast and ingest to persisted.
+- Cluster-wide reset: one HTTP POST broadcasts `eir:reset` and every node's
+  ETS cache, counters, group-counts, and latency histograms clear.
+- Channel backpressure: if a slow browser's channel process has more than
+  500 queued broadcasts, new broadcasts are dropped rather than accumulated.
+  Keeps a stuck client from pinning GB of heap in the cluster.
 
-`Phoenix.LiveDashboard` is mounted at `/dev/dashboard` in dev for BEAM-native
-observability (process tree, ETS, mailboxes, scheduler utilization).
+### simulator — the load generator
 
-### simulator (Elixir)
+Bare `mix new --sup` app. One BEAM process per simulated user. Each holds
+a `Mint.WebSocket` connection and speaks the Phoenix Channel v2 protocol
+directly (JSON arrays over WS, no Elixir client library).
 
-Bare `mix new --sup` app. One BEAM process per simulated user, each holding
-a `Mint.WebSocket` connection to the server and speaking Phoenix Channel v2
-protocol directly (JSON arrays over WS).
-
-Triggered via HTTP:
+Triggered with `POST /run`:
 
 ```
-POST /run
-{ "target": "ws://server/socket/websocket",
+{ "target": "wss://server/socket/websocket",
   "connections": 500,
   "msgs_per_sec": 10,
   "duration": 30 }
 ```
 
-Each client is a supervised GenServer. Ramp-up is staggered to avoid a
-thundering herd on the target. Counters (sent, received, errors) live in
-ETS and get exposed at `GET /stats`.
+Clients now behave like participants: about 33% of messages are replies to
+the last message they received, about 15% are @mentions of the author they
+last heard from. The simulator isn't a firehose; it reads like a crowded
+room.
 
-### client (React + TanStack)
+### client (React + TanStack) — the visualization
 
 Vite + React + TanStack Router + TanStack Query + `phoenix` JS client. Two
-views:
+views.
 
-- `/` the dashboard. Subscribes to `metrics:live` and renders msgs/sec in,
-  msgs/sec persisted, queue depth, WS connections, process count, memory,
-  run queue, per-group cache depth, and a control panel that fires the
-  simulator.
-- `/g/:groupId` the chat view. Joins a group channel, loads history via
-  the group channel's ok-payload, appends live broadcasts as they arrive.
+Dashboard:
+- Two rows of top-level stats: throughput + capacity; then BEAM internals
+  (reductions/sec, atoms, ports, ETS tables, memory breakdown, IO, schedulers).
+- Throughput chart (60 samples, aggregate across all nodes).
+- Nodes panel: one row per replica with its own msgs/sec, connections,
+  processes, memory. Dead nodes prune themselves when the cluster shrinks.
+- Latency histograms for broadcast and persist spans, merged across nodes,
+  with p50/p99/p999/max.
+- Scheduler heatmap: 1 row per node × 8 cells per scheduler, HSL-green by
+  utilization %.
+- Ingest heatmap: node × group table, cell color by relative count. Shows
+  how Railway sprinkled WS connections across replicas.
+- Simulator panel: control a load run from the browser.
+- Chaos panel: kill any replica or a random one.
 
-## Running locally
+Chat:
+- Channels per group.
+- Real Phoenix.Presence list on the right.
+- Click a message to reply; the parent renders inline when you send.
+- `@name` mentions are highlighted; messages mentioning your current nick
+  get an amber accent bar.
+- Click a presence entry to insert their `@name` into your draft.
+- Nickname is editable; the client sends `set_nick` so presence updates
+  across the cluster instead of getting out of sync.
 
-### Fast path: docker-compose
+### Postgres
+
+Regular `postgres:16-alpine` image as its own Railway service. Plain
+connection string on `postgres.railway.internal`. No volume in the demo
+setup (data wipes on Postgres redeploy). Add a volume in the Railway UI
+if you want persistence.
+
+## Run locally
+
+### One shot
 
 ```
 docker compose up --build
 ```
 
-That brings up Postgres, the server, the simulator, and the client.
-
-- server: http://localhost:4000 (LiveDashboard at http://localhost:4000/dev/dashboard)
+- server: http://localhost:4000
 - simulator: http://localhost:4100
 - client: http://localhost:8080
+- LiveDashboard (dev only): http://localhost:4000/dev/dashboard
 
 ### Hot reload
 
 ```
 docker run -d --name eir-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=eir_dev -p 5432:5432 postgres:16-alpine
-
 cd server && mix ecto.create && mix ecto.migrate && mix phx.server
 cd simulator && mix run --no-halt
 cd client && bun dev
@@ -91,83 +122,83 @@ cd client && bun dev
 
 Open http://localhost:5173.
 
-## Triggering a load run
+## Trigger a load run
 
-From the dashboard panel: set connections, msgs/sec, duration, click run.
-
-From the CLI:
+From the dashboard simulator panel, or:
 
 ```
-curl -X POST http://localhost:4100/run \
+curl -X POST https://eir-simulator-production.up.railway.app/run \
   -H 'content-type: application/json' \
-  -d '{"target":"ws://localhost:4000/socket/websocket","connections":500,"msgs_per_sec":10,"duration":30}'
+  -d '{"target":"wss://eir-server-production.up.railway.app/socket/websocket",
+       "connections":500,"msgs_per_sec":10,"duration":30}'
 ```
 
-Watch the dashboard. The fun one is opening two tabs: dashboard in one,
-`/g/general` in the other. You can see the same messages land in the chat
-stream while the counters tick up.
+## Chaos: what actually happens when you kill a node
 
-## Deploying to Railway
+The dashboard chaos button calls `:init.stop/1` on the targeted replica.
+Measured behavior in production (4 replicas on Railway Hobby):
 
-One Railway project, four things: a Postgres addon plus three services
-(`eir-server`, `eir-simulator`, `eir-client`).
+- Kill command to cluster-detects-departure: **~2 seconds**
+- Detected as down to Railway restart + BEAM boot + dns_cluster rejoin: **~6-7 seconds total**
+- Railway assigns the same IPv6 address to the restarted container, so the
+  rejoined node name is identical. The "down" window shows on the
+  dashboard as `cluster: 3 nodes` for roughly 20 ticks at the 3.3Hz
+  broadcast rate.
+- After rejoin, the restarted node receives new WS connections
+  proportionally (Railway load balancer sprinkles), persists to the same
+  shared Postgres, and broadcasts reach it cluster-wide. Its per-node ETS
+  cache starts empty and fills as it handles new messages; history reads
+  that miss the cache fall through to the shared DB.
 
-```
-railway init -n eir-websocket
-railway add -d postgres
+So: the heal is real, but the drop is fast. Fire a run first so there's
+something to watch.
 
-railway add --service eir-server
-railway add --service eir-simulator
-railway add --service eir-client
+## Deploy to Railway
 
-railway domain -s eir-server    -p 4000
-railway domain -s eir-simulator -p 4100
-```
+One Railway project, four services (server, simulator, client, postgres).
+A setup that worked for me:
 
-Set server env:
+1. `railway init -n eir-websocket`
+2. `railway add --image postgres:16-alpine --service postgres`
+3. `railway add --service eir-server` / `eir-simulator` / `eir-client`
+4. `railway domain -s eir-server -p 4000`; same for simulator.
 
-```
-railway variable -s eir-server set PHX_SERVER=true
-railway variable -s eir-server set "SECRET_KEY_BASE=$(openssl rand -base64 48)"
-railway variable -s eir-server set 'DATABASE_URL=${{Postgres.DATABASE_URL}}'
-railway variable -s eir-server set 'PHX_HOST=${{RAILWAY_PUBLIC_DOMAIN}}'
-railway variable -s eir-server set DNS_CLUSTER_QUERY=eir-server.railway.internal
-railway variable -s eir-server set RELEASE_COOKIE="$(openssl rand -hex 16)"
-```
+Env on `eir-server` (use `railway variable set -s eir-server KEY=value`):
+- `PHX_SERVER=true`
+- `SECRET_KEY_BASE` (generate with `mix phx.gen.secret`)
+- `DATABASE_URL=ecto://postgres:<pw>@postgres.railway.internal:5432/<db>`
+- `PHX_HOST=${{RAILWAY_PUBLIC_DOMAIN}}`
+- `DNS_CLUSTER_QUERY=eir-server.railway.internal`
+- `RELEASE_COOKIE=<hex>`
+- `ECTO_IPV6=1`
+- Optional: `OPENROUTER_API_KEY=<key>` + `BOT_MODEL=meta-llama/llama-3.1-8b-instruct`
 
-Client env (references resolve at build time, so order does not matter):
+Env on `eir-client` (resolves at build time):
+- `VITE_SERVER_URL=https://${{eir-server.RAILWAY_PUBLIC_DOMAIN}}`
+- `VITE_SIM_URL=https://${{eir-simulator.RAILWAY_PUBLIC_DOMAIN}}`
+- `VITE_SOCKET_URL=wss://${{eir-server.RAILWAY_PUBLIC_DOMAIN}}/socket`
 
-```
-railway variable -s eir-client set 'VITE_SERVER_URL=https://${{eir-server.RAILWAY_PUBLIC_DOMAIN}}'
-railway variable -s eir-client set 'VITE_SIM_URL=https://${{eir-simulator.RAILWAY_PUBLIC_DOMAIN}}'
-railway variable -s eir-client set 'VITE_SOCKET_URL=wss://${{eir-server.RAILWAY_PUBLIC_DOMAIN}}/socket'
-```
-
-Deploy each service from its subdir:
-
-```
-cd server    && railway up -s eir-server    --ci
-cd simulator && railway up -s eir-simulator --ci
-cd client    && railway up -s eir-client    --ci
-```
-
-Finally:
+Deploy each from repo root with `--path-as-root`:
 
 ```
-railway domain -s eir-client -p 8080
+railway up ./server    -s eir-server    --path-as-root --ci
+railway up ./simulator -s eir-simulator --path-as-root --ci
+railway up ./client    -s eir-client    --path-as-root --ci
 ```
 
-### Clustering
+Finally `railway domain -s eir-client -p 8080`.
 
-Scale the server to two or more replicas from the Railway dashboard. The
-`dns_cluster` lib polls the internal DNS name (`eir-server.railway.internal`)
-and auto-connects BEAM nodes. `Phoenix.PubSub.PG2` handles cross-node
-broadcasts for free. The dashboard's cluster panel lists every connected node.
+### Scaling the server
+
+Set the replica count on `eir-server` in the Railway UI. `rel/env.sh.eex`
+already names each replica `eir@<own-ipv6>` and sets
+`ERL_AFLAGS="-proto_dist inet6_tcp"`, so `dns_cluster` meshes them over
+IPv6 automatically.
 
 ## Data model
 
-One table, `messages`. Primary key is a UUIDv7 string (time-ordered). An
-index on `(group_id, id DESC)` is all you need for cursor pagination:
+One table, `messages`. Primary key is a UUIDv7 canonical string (time
+ordered). Index on `(group_id, id DESC)` is all cursor pagination needs:
 
 ```
 from m in Message,
@@ -176,20 +207,35 @@ from m in Message,
   limit: ^page_size
 ```
 
-No offsets, no keyset hacks.
+## Numbers from a real production run
 
-## What to watch while it runs
+100 simulated clients × 20 msg/s × 30s on the live deploy:
 
-Fire a big run (a few thousand connections, 10 msg/s each) and look at:
+- msgs/sec in: ~2000
+- queue depth: hovers near 0
+- ingest to broadcast: p50 128µs, p99 256µs
+- ingest to persisted: p50 ≈ 200ms (the Broadway batch timeout)
+- reductions/sec per node: hundreds of millions
+- memory per replica: ~120–200 MB resident
+- processes per replica: 500–1000 (channel processes are cheap)
 
-- `msgs/sec in` vs `msgs/sec persisted`: Broadway absorbing spikes, queue
-  depth hovering near zero.
-- `processes`: will sit at `connections + a few hundred` overhead. BEAM does
-  not flinch at tens of thousands of processes.
-- `memory`: per-process cost stays tiny, typically under 10 KB each.
-- `cache by group`: fan-out visible live. Click through to a group's chat
-  view to read the same stream the numbers are describing.
-- `cluster`: scale up replicas on Railway and watch nodes appear in the list.
+## What to watch
+
+- Fire a run with 300+ connections and watch the latency histogram fill.
+  The broadcast span stays sub-millisecond even at thousands of
+  broadcasts/sec.
+- Open two tabs: dashboard + `/g/general`. Watch the messages tick up in
+  the chat while the counters move on the dashboard.
+- Type `@bot hi` in any group. Reply comes from a leader-elected bot
+  running on whichever replica has the lowest node name right now.
+- Click `[ kill random ]` on the chaos panel. Nodes panel drops to 3,
+  holds for ~6 seconds, climbs back to 4.
+
+## Hot code reload
+
+See [docs/hot-reload.md](docs/hot-reload.md) for a walkthrough: `railway
+ssh` into a replica, `bin/eir remote` to attach an IEx shell to the
+running BEAM, redefine `Eir.Bot.canned/1` mid-flight. No connection drops.
 
 ## License
 

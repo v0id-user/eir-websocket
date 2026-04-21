@@ -318,9 +318,18 @@ export function Chat() {
         >
           <input
             value={nick}
+            maxLength={64}
             onChange={(e) => {
-              setNick(e.target.value);
-              setNickname(e.target.value);
+              const next = e.target.value.slice(0, 64);
+              setNick(next);
+              setNickname(next);
+              // Debounced notify: tell the server our new name so presence
+              // updates. We push on every keystroke but the server handles
+              // untrack+track cheaply.
+              const trimmed = next.trim();
+              if (trimmed && channelRef.current) {
+                channelRef.current.push("set_nick", { nickname: trimmed });
+              }
             }}
             style={{ width: 90 }}
           />

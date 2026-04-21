@@ -91,7 +91,10 @@ defmodule Eir.Bot do
     msg_id = msg.id
     prompt = msg.body
 
-    Task.start(fn ->
+    # Run under a supervised Task with monitor so if Eir.Bot crashes, the
+    # in-flight LLM call is also torn down (no orphaned HTTP request
+    # inventing a bot reply after the bot itself is dead).
+    Task.Supervisor.start_child(Eir.Bot.TaskSup, fn ->
       reply =
         case provider do
           {:openrouter, key, model} -> ask_openrouter(prompt, key, model) || canned(prompt)
@@ -99,7 +102,7 @@ defmodule Eir.Bot do
           :canned -> canned(prompt)
         end
 
-      if is_binary(reply) and reply != "" do
+      if is_binary(reply) and reply != "" and Process.alive?(parent) do
         Eir.Chat.ingest(%{
           group_id: group_id,
           author: @bot_nick,
@@ -108,7 +111,7 @@ defmodule Eir.Bot do
         })
       end
 
-      send(parent, {:reply_done, msg_id})
+      if Process.alive?(parent), do: send(parent, {:reply_done, msg_id})
     end)
   end
 

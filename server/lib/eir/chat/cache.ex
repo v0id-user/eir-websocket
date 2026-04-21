@@ -103,12 +103,13 @@ defmodule Eir.Chat.Cache do
   end
 
   defp select_desc(group_id, pivot_bin, limit) do
-    # start at the key just before {group_id, pivot_bin}
-    start_key = {group_id, pivot_bin}
-
-    case :ets.prev(@table, start_key) do
-      :"$end_of_table" -> []
-      key -> walk_desc(key, group_id, limit, [])
+    # With {group_id, id} keys in an ordered_set, every group's keys are
+    # contiguous. :ets.prev({group_id, pivot}) returns the largest key
+    # less than that. If it's in a different group, there are zero keys
+    # in group_id lower than the pivot, so the correct answer is [].
+    case :ets.prev(@table, {group_id, pivot_bin}) do
+      {^group_id, _} = key -> walk_desc(key, group_id, limit, [])
+      _ -> []
     end
   end
 
