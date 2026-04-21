@@ -8,6 +8,34 @@ import { Presence, type Channel } from "phoenix";
 
 type PresenceUser = { nickname: string; node: string; online_at: number };
 
+const MENTION_RE = /(@[a-zA-Z0-9_-]+)/g;
+
+function containsMention(body: string, nick: string): boolean {
+  if (!nick) return false;
+  const needle = "@" + nick.toLowerCase();
+  return body.toLowerCase().includes(needle);
+}
+
+function truncate(s: string, n: number): string {
+  if (s.length <= n) return s;
+  return s.slice(0, n - 1) + "…";
+}
+
+function BodyText({ body }: { body: string }) {
+  const parts = body.split(MENTION_RE);
+  return (
+    <span>
+      {parts.map((p, i) =>
+        p.startsWith("@") ? (
+          <span key={i} style={{ color: "#c9a76a" }}>{p}</span>
+        ) : (
+          <span key={i}>{p}</span>
+        ),
+      )}
+    </span>
+  );
+}
+
 export function Chat() {
   const { groupId } = useParams({ from: "/g/$groupId" });
   const nav = useNavigate();
@@ -15,9 +43,16 @@ export function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [presence, setPresence] = useState<PresenceUser[]>([]);
   const [draft, setDraft] = useState("");
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [joinedSource, setJoinedSource] = useState<string>("");
   const channelRef = useRef<Channel | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+
+  const messagesById = useMemo(() => {
+    const m = new Map<string, Message>();
+    for (const msg of messages) m.set(msg.id, msg);
+    return m;
+  }, [messages]);
 
   const { data: presets } = useQuery({
     queryKey: ["presets"],
@@ -89,8 +124,13 @@ export function Chat() {
 
   function send() {
     if (!draft.trim() || !channelRef.current) return;
-    channelRef.current.push("send", { body: draft, nickname: nick });
+    channelRef.current.push("send", {
+      body: draft,
+      nickname: nick,
+      reply_to_id: replyTo?.id ?? null,
+    });
     setDraft("");
+    setReplyTo(null);
   }
 
   const byAuthor = useMemo(() => {
@@ -184,17 +224,88 @@ export function Chat() {
           ref={scrollerRef}
           style={{ flex: 1, overflow: "auto", padding: "8px 12px" }}
         >
-          {messages.map((m) => (
-            <div key={m.id} style={{ marginBottom: 2, fontSize: 12 }}>
-              <span style={{ color: "#555", fontSize: 10 }}>
-                {m.id.slice(0, 8)}
-              </span>{" "}
-              <span style={{ color: "#a0a0a0" }}>{m.author}</span>{" "}
-              <span style={{ color: "#555" }}>:</span>{" "}
-              <span>{m.body}</span>
-            </div>
-          ))}
+          {messages.map((m) => {
+            const parent = m.reply_to_id ? messagesById.get(m.reply_to_id) : null;
+            const mentionsMe = containsMention(m.body, nick);
+            return (
+              <div
+                key={m.id}
+                onClick={() => setReplyTo(m)}
+                style={{
+                  marginBottom: 2,
+                  fontSize: 12,
+                  cursor: "pointer",
+                  padding: "1px 4px",
+                  borderLeft: mentionsMe
+                    ? "2px solid #c9a76a"
+                    : "2px solid transparent",
+                  background: mentionsMe ? "#1a1613" : "transparent",
+                }}
+                title="click to reply"
+              >
+                {parent && (
+                  <div
+                    style={{
+                      fontSize: 10,
+                      color: "#666",
+                      marginLeft: 12,
+                      borderLeft: "2px solid #333",
+                      paddingLeft: 6,
+                      marginBottom: 1,
+                    }}
+                  >
+                    ↳ <span style={{ color: "#888" }}>{parent.author}</span>:{" "}
+                    {truncate(parent.body, 80)}
+                  </div>
+                )}
+                {!parent && m.reply_to_id && (
+                  <div
+                    style={{
+                      fontSize: 10,
+                      color: "#555",
+                      marginLeft: 12,
+                      borderLeft: "2px solid #333",
+                      paddingLeft: 6,
+                      marginBottom: 1,
+                    }}
+                  >
+                    ↳ <span style={{ color: "#555" }}>{m.reply_to_id.slice(0, 8)}</span>{" "}
+                    (scroll to load)
+                  </div>
+                )}
+                <span style={{ color: "#555", fontSize: 10 }}>
+                  {m.id.slice(0, 8)}
+                </span>{" "}
+                <span style={{ color: "#a0a0a0" }}>{m.author}</span>{" "}
+                <span style={{ color: "#555" }}>:</span>{" "}
+                <BodyText body={m.body} />
+              </div>
+            );
+          })}
         </div>
+        {replyTo && (
+          <div
+            style={{
+              borderTop: "1px solid #333",
+              padding: "4px 10px",
+              fontSize: 11,
+              background: "#141414",
+              color: "#888",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <span>↳ replying to</span>
+            <span style={{ color: "#c9a76a" }}>{replyTo.author}</span>
+            <span style={{ color: "#666", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {truncate(replyTo.body, 100)}
+            </span>
+            <button onClick={() => setReplyTo(null)} style={{ fontSize: 10, padding: "1px 6px" }}>
+              [ cancel ]
+            </button>
+          </div>
+        )}
         <div
           style={{
             borderTop: "1px solid #333",
@@ -218,6 +329,7 @@ export function Chat() {
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") send();
+              if (e.key === "Escape") setReplyTo(null);
             }}
             placeholder={`> #${groupId}`}
             style={{ flex: 1 }}
@@ -250,8 +362,11 @@ export function Chat() {
           {presence.map((u) => (
             <div
               key={u.nickname}
-              style={{ fontSize: 11, padding: "1px 0" }}
-              title={`on ${u.node}`}
+              onClick={() =>
+                setDraft((d) => (d ? d + " @" + u.nickname + " " : "@" + u.nickname + " "))
+              }
+              style={{ fontSize: 11, padding: "1px 0", cursor: "pointer" }}
+              title={`click to @mention · on ${u.node}`}
             >
               <span style={{ color: "#4a8", marginRight: 4 }}>*</span>
               <span style={{ color: "#a0a0a0" }}>{u.nickname}</span>
