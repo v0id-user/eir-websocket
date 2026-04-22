@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-router";
 import { Dashboard } from "./routes/Dashboard";
 import { Chat } from "./routes/Chat";
+import { What } from "./routes/What";
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -43,6 +44,9 @@ const rootRoute = createRootRoute({
         >
           chat
         </Link>
+        <Link to="/what" style={linkStyle} activeProps={{ style: activeLinkStyle }}>
+          what is this
+        </Link>
         <span
           style={{
             marginLeft: "auto",
@@ -72,7 +76,13 @@ const chatRoute = createRoute({
   component: Chat,
 });
 
-const routeTree = rootRoute.addChildren([dashboardRoute, chatRoute]);
+const whatRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/what",
+  component: What,
+});
+
+const routeTree = rootRoute.addChildren([dashboardRoute, chatRoute, whatRoute]);
 
 export const router = createRouter({ routeTree });
 
