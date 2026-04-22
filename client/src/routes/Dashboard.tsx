@@ -930,8 +930,14 @@ const SIM_PRESETS = [
 const SIM_LIMITS = {
   connections: { min: 1,  max: 1500 },
   mps:         { min: 0,  max: 50   },
-  duration:    { min: 1,  max: 180  },
+  duration:    { min: 1,  max: 120  },
 };
+
+// Soft thresholds for the "estimated load" preview shown under the inputs.
+// Crossing them switches the line from gray to amber to red so you know
+// you're about to ship a wall of messages before clicking [ run ].
+const LOAD_WARN  = 250_000;
+const LOAD_HEAVY = 1_000_000;
 
 function clamp(n: number, lo: number, hi: number): number {
   if (Number.isNaN(n)) return lo;
@@ -1087,6 +1093,22 @@ function SimControls({ sim }: { sim: SimSnapshot | null }) {
       <div style={{ fontSize: 10, color: "#555" }}>
         max: {SIM_LIMITS.connections.max} conns · {SIM_LIMITS.mps.max}/s · {SIM_LIMITS.duration.max}s
       </div>
+      {(() => {
+        const est = Math.max(0, connections) * Math.max(0, mps) * Math.max(0, duration);
+        const tone =
+          est >= LOAD_HEAVY ? "#d96a4a" : est >= LOAD_WARN ? "#c9a76a" : "#666";
+        const note =
+          est >= LOAD_HEAVY ? " — heavy, persistence + WS fan-out will work" :
+          est >= LOAD_WARN  ? " — substantial, postgres rows will pile up" : "";
+        return (
+          <div
+            style={{ fontSize: 10, color: tone }}
+            title={`connections × msgs/sec × duration = total messages this run will ingest into the cluster. fan-out broadcast deliveries will be ~19× this.`}
+          >
+            est. ~{est.toLocaleString()} msgs ingested{note}
+          </div>
+        );
+      })()}
       <div style={{ display: "flex", gap: 6 }}>
         <button onClick={run} disabled={running}>[ run ]</button>
         <button onClick={stop} disabled={!running}>[ stop ]</button>
