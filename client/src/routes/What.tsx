@@ -344,18 +344,22 @@ inserted_at  timestamptz`}</Pre>
 // --- diagrams ---
 
 function ProcessVsThreadDiagram() {
-  // Two columns: OS thread "1 connection = 1 thread" vs BEAM process.
-  // Visualize the size delta and per-process heap.
+  // Two clearly separated columns. A vertical divider between the two
+  // panels + each side wrapped in its own labelled box so the captions
+  // never run together visually.
   return (
-    <svg viewBox="0 0 760 230" width="100%" style={{ display: "block" }}>
+    <svg viewBox="0 0 760 280" width="100%" style={{ display: "block" }}>
       <defs>
         <pattern id="dots" width="6" height="6" patternUnits="userSpaceOnUse">
           <circle cx="3" cy="3" r="0.8" fill="#444" />
         </pattern>
       </defs>
 
-      {/* left: OS thread */}
-      <text x={20} y={22} fill="#888" fontSize={11} fontFamily="monospace">
+      {/* divider */}
+      <line x1={380} y1={0} x2={380} y2={280} stroke="#222" strokeDasharray="3,3" />
+
+      {/* === LEFT: OS thread === */}
+      <text x={185} y={22} fill="#c0c0c0" fontSize={12} fontFamily="monospace" textAnchor="middle">
         traditional OS thread per connection
       </text>
       <rect x={20} y={36} width={340} height={170} fill="url(#dots)" stroke="#333" />
@@ -380,12 +384,19 @@ function ProcessVsThreadDiagram() {
           </text>
         </g>
       ))}
-      <text x={190} y={224} fill="#666" fontSize={10} textAnchor="middle" fontFamily="monospace">
-        ~thousands max · GC pauses everyone · locks for shared state
+      {/* left captions, three lines for clarity */}
+      <text x={185} y={228} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">
+        ~thousands max per box
+      </text>
+      <text x={185} y={244} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">
+        GC pauses every thread
+      </text>
+      <text x={185} y={260} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">
+        locks for shared state
       </text>
 
-      {/* right: BEAM */}
-      <text x={400} y={22} fill="#888" fontSize={11} fontFamily="monospace">
+      {/* === RIGHT: BEAM === */}
+      <text x={570} y={22} fill="#c0c0c0" fontSize={12} fontFamily="monospace" textAnchor="middle">
         BEAM process per connection
       </text>
       <rect x={400} y={36} width={340} height={170} fill="url(#dots)" stroke="#3a4a3a" />
@@ -403,19 +414,33 @@ function ProcessVsThreadDiagram() {
             width={cw}
             height={ch}
             fill="#0a0a0a"
-            stroke="#3a4a3a"
+            stroke="#3a5a3a"
             strokeWidth={0.5}
           />
         );
       })}
-      <text x={570} y={224} fill="#666" fontSize={10} textAnchor="middle" fontFamily="monospace">
-        millions per VM · per-process heap · no shared state · no locks
+      {/* "each cell = 1 process, ~2 KB" callout */}
+      <text x={570} y={196} fill="#888" fontSize={9} textAnchor="middle" fontFamily="monospace">
+        each cell = 1 process · ~2 KB initial heap
+      </text>
+      {/* right captions, three lines for clarity */}
+      <text x={570} y={228} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">
+        millions per VM
+      </text>
+      <text x={570} y={244} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">
+        per-process heap, GC isolated
+      </text>
+      <text x={570} y={260} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">
+        no shared state · no locks
       </text>
     </svg>
   );
 }
 
 function ArchitectureDiagram() {
+  // eir-server is rendered as a stack of three offset boxes to show
+  // "this is a multi-replica service", with the cluster mesh edges drawn
+  // between them — no weird self-loop on a single box.
   return (
     <svg viewBox="0 0 760 280" width="100%" style={{ display: "block" }}>
       <defs>
@@ -433,20 +458,29 @@ function ArchitectureDiagram() {
       </defs>
 
       <Box x={20} y={100} w={140} h={80} title="client" sub="React + TanStack" sub2="static, nginx" />
-      <Box x={300} y={40} w={160} h={80} title="eir-server" sub="Phoenix" sub2="× N replicas" accent />
+
+      {/* eir-server: stack of three offset rects = replica cluster */}
+      <g>
+        <rect x={314} y={54} width={160} height={80} fill="#0a0a0a" stroke="#3a4a3a" />
+        <rect x={307} y={47} width={160} height={80} fill="#0a0a0a" stroke="#3a4a3a" />
+        <rect x={300} y={40} width={160} height={80} fill="#0a0a0a" stroke="#3a4a3a" />
+        <text x={380} y={62} fill="#e0e0e0" fontSize={12} textAnchor="middle" fontFamily="monospace">eir-server</text>
+        <text x={380} y={80} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">Phoenix</text>
+        <text x={380} y={96} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">× N replicas</text>
+        <text x={380} y={112} fill="#3a8a3a" fontSize={9} textAnchor="middle" fontFamily="monospace">⌐ internal mesh ⌐</text>
+      </g>
+
       <Box x={300} y={160} w={160} h={80} title="eir-simulator" sub="Elixir, Mint.WS" sub2="user-firing rig" />
       <Box x={580} y={100} w={140} h={80} title="postgres" sub=":16-alpine" sub2="private only" />
 
       {/* client → server (HTTPS/WSS) */}
-      <Arrow x1={160} y1={130} x2={300} y2={75} label="HTTPS / WSS" />
+      <Arrow x1={160} y1={130} x2={300} y2={80} label="HTTPS / WSS" />
       {/* client → simulator (HTTPS) */}
       <Arrow x1={160} y1={155} x2={300} y2={195} label="HTTPS trigger" />
       {/* simulator → server (WSS) */}
-      <Arrow x1={380} y1={160} x2={380} y2={120} label="WSS load" />
+      <Arrow x1={380} y1={160} x2={380} y2={134} label="WSS load" />
       {/* server → postgres (TCP) */}
-      <Arrow x1={460} y1={80} x2={580} y2={130} label="TCP" />
-      {/* server ↔ server (cluster) */}
-      <SelfArrow x={460} y={50} label="cluster mesh" />
+      <Arrow x1={474} y1={80} x2={580} y2={130} label="TCP" />
     </svg>
   );
 }
@@ -772,25 +806,6 @@ function Arrow({
   );
 }
 
-function SelfArrow({ x, y, label }: { x: number; y: number; label?: string }) {
-  return (
-    <g>
-      <path
-        d={`M ${x} ${y} q -50 -40 0 -50 q 60 0 0 50`}
-        fill="none"
-        stroke="#888"
-        strokeWidth={1}
-        markerEnd="url(#arr)"
-      />
-      {label && (
-        <text x={x - 25} y={y - 35} fill="#888" fontSize={10} fontFamily="monospace">
-          {label}
-        </text>
-      )}
-    </g>
-  );
-}
-
 function SVGWrapper({ children }: { children: React.ReactNode }) {
   return (
     <div
@@ -918,14 +933,23 @@ function NumberedItem({
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "32px 1fr",
+        gridTemplateColumns: "52px 1fr",
         gap: 12,
         margin: "8px 0",
         padding: "6px 0",
         borderTop: "1px dotted #222",
       }}
     >
-      <span style={{ color: "#666", fontSize: 11, paddingTop: 2 }}>[ {n} ]</span>
+      <span
+        style={{
+          color: "#666",
+          fontSize: 11,
+          paddingTop: 2,
+          whiteSpace: "nowrap",
+        }}
+      >
+        [ {n} ]
+      </span>
       <div>
         <div style={{ color: "#e0e0e0", fontSize: 12 }}>{t}</div>
         <div style={{ color: "#a8a8a8", marginTop: 2 }}>{children}</div>
