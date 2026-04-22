@@ -344,93 +344,92 @@ inserted_at  timestamptz`}</Pre>
 // --- diagrams ---
 
 function ProcessVsThreadDiagram() {
-  // Two clearly separated columns. A vertical divider between the two
-  // panels + each side wrapped in its own labelled box so the captions
-  // never run together visually.
+  // Two halves separated by a dashed vertical divider in the middle.
+  // Each half: title, body (visual), 3-line caption block at the bottom.
+  // Generous padding so nothing crowds anything.
+  const W = 1100;
+  const H = 460;
+  const mid = W / 2;
+  const halfW = mid - 20;             // each half occupies 0..mid-20 and mid+20..W
+  const leftCenterX = halfW / 2 + 20;  // x center of the left half ~ 280
+  const rightCenterX = mid + 20 + halfW / 2; // ~ 820
+
   return (
-    <svg viewBox="0 0 760 280" width="100%" style={{ display: "block" }}>
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block" }}>
       <defs>
         <pattern id="dots" width="6" height="6" patternUnits="userSpaceOnUse">
           <circle cx="3" cy="3" r="0.8" fill="#444" />
         </pattern>
       </defs>
 
-      {/* divider */}
-      <line x1={380} y1={0} x2={380} y2={280} stroke="#222" strokeDasharray="3,3" />
+      <line x1={mid} y1={20} x2={mid} y2={H - 20} stroke="#222" strokeDasharray="4,4" />
 
-      {/* === LEFT: OS thread === */}
-      <text x={185} y={22} fill="#c0c0c0" fontSize={12} fontFamily="monospace" textAnchor="middle">
+      {/* === LEFT === */}
+      <text x={leftCenterX} y={36} fill="#e0e0e0" fontSize={16} textAnchor="middle" fontFamily="monospace">
         traditional OS thread per connection
       </text>
-      <rect x={20} y={36} width={340} height={170} fill="url(#dots)" stroke="#333" />
-      {[0, 1, 2, 3, 4, 5].map((i) => (
-        <g key={i}>
-          <rect
-            x={36 + (i % 3) * 108}
-            y={56 + Math.floor(i / 3) * 70}
-            width={92}
-            height={54}
-            fill="#0a0a0a"
-            stroke="#5a4040"
-          />
-          <text x={36 + (i % 3) * 108 + 46} y={75 + Math.floor(i / 3) * 70} fill="#c0c0c0" fontSize={10} textAnchor="middle" fontFamily="monospace">
-            thread #{i + 1}
-          </text>
-          <text x={36 + (i % 3) * 108 + 46} y={89 + Math.floor(i / 3) * 70} fill="#888" fontSize={9} textAnchor="middle" fontFamily="monospace">
-            ~8 MB stack
-          </text>
-          <text x={36 + (i % 3) * 108 + 46} y={101 + Math.floor(i / 3) * 70} fill="#666" fontSize={9} textAnchor="middle" fontFamily="monospace">
-            shared heap
-          </text>
-        </g>
-      ))}
-      {/* left captions, three lines for clarity */}
-      <text x={185} y={228} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">
+      <rect x={40} y={64} width={halfW - 40} height={240} fill="url(#dots)" stroke="#333" />
+      {[0, 1, 2, 3, 4, 5].map((i) => {
+        const cols = 3;
+        const tw = 130;
+        const th = 80;
+        const innerLeft = 40 + 24;
+        const innerTop = 64 + 24;
+        const cellGapX = ((halfW - 40) - 48 - cols * tw) / (cols - 1); // distribute remaining horiz space
+        const cellGapY = 16;
+        const x = innerLeft + (i % cols) * (tw + cellGapX);
+        const y = innerTop + Math.floor(i / cols) * (th + cellGapY);
+        return (
+          <g key={i}>
+            <rect x={x} y={y} width={tw} height={th} fill="#0a0a0a" stroke="#5a4040" />
+            <text x={x + tw / 2} y={y + 28} fill="#c0c0c0" fontSize={13} textAnchor="middle" fontFamily="monospace">
+              thread #{i + 1}
+            </text>
+            <text x={x + tw / 2} y={y + 50} fill="#888" fontSize={11} textAnchor="middle" fontFamily="monospace">
+              ~8 MB stack
+            </text>
+            <text x={x + tw / 2} y={y + 68} fill="#888" fontSize={11} textAnchor="middle" fontFamily="monospace">
+              shared heap
+            </text>
+          </g>
+        );
+      })}
+      <text x={leftCenterX} y={344} fill="#a8a8a8" fontSize={13} textAnchor="middle" fontFamily="monospace">
         ~thousands max per box
       </text>
-      <text x={185} y={244} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">
+      <text x={leftCenterX} y={368} fill="#a8a8a8" fontSize={13} textAnchor="middle" fontFamily="monospace">
         GC pauses every thread
       </text>
-      <text x={185} y={260} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">
+      <text x={leftCenterX} y={392} fill="#a8a8a8" fontSize={13} textAnchor="middle" fontFamily="monospace">
         locks for shared state
       </text>
 
-      {/* === RIGHT: BEAM === */}
-      <text x={570} y={22} fill="#c0c0c0" fontSize={12} fontFamily="monospace" textAnchor="middle">
+      {/* === RIGHT === */}
+      <text x={rightCenterX} y={36} fill="#e0e0e0" fontSize={16} textAnchor="middle" fontFamily="monospace">
         BEAM process per connection
       </text>
-      <rect x={400} y={36} width={340} height={170} fill="url(#dots)" stroke="#3a4a3a" />
+      <rect x={mid + 40} y={64} width={halfW - 40} height={240} fill="url(#dots)" stroke="#3a4a3a" />
       {Array.from({ length: 96 }).map((_, i) => {
         const cols = 12;
-        const cw = 22;
-        const ch = 14;
-        const x = 412 + (i % cols) * (cw + 4);
-        const y = 50 + Math.floor(i / cols) * (ch + 4);
+        const cw = 28;
+        const ch = 18;
+        const innerLeft = mid + 40 + 24;
+        const innerTop = 64 + 24;
+        const cellGapX = ((halfW - 40) - 48 - cols * cw) / (cols - 1);
+        const cellGapY = 4;
+        const x = innerLeft + (i % cols) * (cw + cellGapX);
+        const y = innerTop + Math.floor(i / cols) * (ch + cellGapY);
         return (
-          <rect
-            key={i}
-            x={x}
-            y={y}
-            width={cw}
-            height={ch}
-            fill="#0a0a0a"
-            stroke="#3a5a3a"
-            strokeWidth={0.5}
-          />
+          <rect key={i} x={x} y={y} width={cw} height={ch} fill="#0a0a0a" stroke="#3a5a3a" strokeWidth={0.5} />
         );
       })}
-      {/* "each cell = 1 process, ~2 KB" callout */}
-      <text x={570} y={196} fill="#888" fontSize={9} textAnchor="middle" fontFamily="monospace">
+      <text x={rightCenterX} y={344} fill="#a8a8a8" fontSize={13} textAnchor="middle" fontFamily="monospace">
         each cell = 1 process · ~2 KB initial heap
       </text>
-      {/* right captions, three lines for clarity */}
-      <text x={570} y={228} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">
-        millions per VM
+      <text x={rightCenterX} y={368} fill="#a8a8a8" fontSize={13} textAnchor="middle" fontFamily="monospace">
+        millions per VM · per-process heap, GC isolated
       </text>
-      <text x={570} y={244} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">
-        per-process heap, GC isolated
-      </text>
-      <text x={570} y={260} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">
+      <text x={rightCenterX} y={392} fill="#a8a8a8" fontSize={13} textAnchor="middle" fontFamily="monospace">
         no shared state · no locks
       </text>
     </svg>
@@ -438,257 +437,196 @@ function ProcessVsThreadDiagram() {
 }
 
 function ArchitectureDiagram() {
-  // eir-server is rendered as a stack of three offset boxes to show
-  // "this is a multi-replica service", with the cluster mesh edges drawn
-  // between them — no weird self-loop on a single box.
+  // Layout rules used here (and in every diagram below):
+  //   - viewBox is large (1100w) so absolute pixel sizes (~16px text)
+  //     read normally on a real screen
+  //   - boxes are tall (140h) and wide (260w), text is centered with
+  //     22-24px line height, never within 16px of the box edge
+  //   - arrow labels live in their own clear "lane" between boxes,
+  //     offset 14-18px from the arrow itself so they never sit on it
   return (
-    <svg viewBox="0 0 760 280" width="100%" style={{ display: "block" }}>
+    <svg viewBox="0 0 1100 380" width="100%" style={{ display: "block" }}>
       <defs>
-        <marker
-          id="arr"
-          viewBox="0 0 10 10"
-          refX="9"
-          refY="5"
-          markerWidth="6"
-          markerHeight="6"
-          orient="auto"
-        >
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
           <path d="M0,0 L10,5 L0,10 z" fill="#888" />
         </marker>
       </defs>
 
-      <Box x={20} y={100} w={140} h={80} title="client" sub="React + TanStack" sub2="static, nginx" />
+      {/* client (left) */}
+      <NodeBox x={40}  y={130} w={240} title="client" lines={["React + TanStack", "static, nginx"]} />
 
-      {/* eir-server: stack of three offset rects = replica cluster */}
+      {/* eir-server (center top) — 3 stacked rects with replica cluster */}
       <g>
-        <rect x={314} y={54} width={160} height={80} fill="#0a0a0a" stroke="#3a4a3a" />
-        <rect x={307} y={47} width={160} height={80} fill="#0a0a0a" stroke="#3a4a3a" />
-        <rect x={300} y={40} width={160} height={80} fill="#0a0a0a" stroke="#3a4a3a" />
-        <text x={380} y={62} fill="#e0e0e0" fontSize={12} textAnchor="middle" fontFamily="monospace">eir-server</text>
-        <text x={380} y={80} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">Phoenix</text>
-        <text x={380} y={96} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">× N replicas</text>
-        <text x={380} y={112} fill="#3a8a3a" fontSize={9} textAnchor="middle" fontFamily="monospace">⌐ internal mesh ⌐</text>
+        <rect x={446} y={26} width={260} height={140} fill="#0a0a0a" stroke="#3a4a3a" />
+        <rect x={433} y={13} width={260} height={140} fill="#0a0a0a" stroke="#3a4a3a" />
+        <rect x={420} y={0}  width={260} height={140} fill="#0a0a0a" stroke="#3a4a3a" />
+        <text x={550} y={36}  fill="#e0e0e0" fontSize={16} textAnchor="middle" fontFamily="monospace">eir-server</text>
+        <text x={550} y={62}  fill="#a8a8a8" fontSize={13} textAnchor="middle" fontFamily="monospace">Phoenix · BEAM</text>
+        <text x={550} y={86}  fill="#a8a8a8" fontSize={13} textAnchor="middle" fontFamily="monospace">× N replicas</text>
+        <text x={550} y={114} fill="#3a8a3a" fontSize={11} textAnchor="middle" fontFamily="monospace">internal cluster mesh</text>
       </g>
 
-      <Box x={300} y={160} w={160} h={80} title="eir-simulator" sub="Elixir, Mint.WS" sub2="user-firing rig" />
-      <Box x={580} y={100} w={140} h={80} title="postgres" sub=":16-alpine" sub2="private only" />
+      {/* eir-simulator (center bottom) */}
+      <NodeBox x={420} y={230} w={260} title="eir-simulator" lines={["Elixir + Mint.WebSocket", "user-firing rig"]} />
 
-      {/* client → server (HTTPS/WSS) */}
-      <Arrow x1={160} y1={130} x2={300} y2={80} label="HTTPS / WSS" />
-      {/* client → simulator (HTTPS) */}
-      <Arrow x1={160} y1={155} x2={300} y2={195} label="HTTPS trigger" />
-      {/* simulator → server (WSS) */}
-      <Arrow x1={380} y1={160} x2={380} y2={134} label="WSS load" />
-      {/* server → postgres (TCP) */}
-      <Arrow x1={474} y1={80} x2={580} y2={130} label="TCP" />
+      {/* postgres (right) */}
+      <NodeBox x={820} y={130} w={240} title="postgres" lines={[":16-alpine", "private network only"]} />
+
+      {/* arrows */}
+      <ArrowLabel x1={280} y1={170} x2={420} y2={88}  label="HTTPS / WSS"   labelX={350} labelY={120} />
+      <ArrowLabel x1={280} y1={210} x2={420} y2={272} label="HTTPS trigger" labelX={350} labelY={258} />
+      <ArrowLabel x1={550} y1={230} x2={550} y2={146} label="WSS load"      labelX={580} labelY={195} />
+      <ArrowLabel x1={680} y1={88}  x2={820} y2={180} label="TCP"           labelX={760} labelY={120} />
     </svg>
   );
 }
 
 function HotPathDiagram() {
+  // Six steps wrapped to two rows of three. Each box is 280×100 with
+  // generous internal padding so the labels never crowd the borders.
   const steps = [
-    { id: "0", t: "ID mint", sub: "UUIDv7" },
-    { id: "1", t: "ETS put", sub: "~5 µs" },
-    { id: "2", t: "PubSub broadcast", sub: "~100 µs" },
-    { id: "3", t: "cache:sync", sub: "cluster mirror" },
-    { id: "4", t: "Broadway push", sub: "~1 µs" },
-    { id: "5", t: "Repo.insert_all", sub: "~200 ms (batched)" },
+    { id: "0", t: "ID mint",          sub: "UUIDv7, time-ordered" },
+    { id: "1", t: "ETS put",          sub: "~5 µs · local cache" },
+    { id: "2", t: "PubSub broadcast", sub: "~100 µs · cluster-wide" },
+    { id: "3", t: "cache:sync",       sub: "mirror to all replicas" },
+    { id: "4", t: "Broadway push",    sub: "~1 µs · into batch buffer" },
+    { id: "5", t: "Repo.insert_all",  sub: "~200 ms · batched SQL" },
   ];
 
-  const w = 760;
-  const h = 200;
-  const boxW = 110;
-  const boxH = 56;
-  const gap = (w - boxW * steps.length) / (steps.length + 1);
+  const boxW = 280;
+  const boxH = 100;
+  const colGap = 50;
+  const rowGap = 80;
+  const leftPad = 40;
+  const topPad = 50;
 
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} width="100%" style={{ display: "block" }}>
+    <svg viewBox="0 0 1100 380" width="100%" style={{ display: "block" }}>
       <defs>
-        <marker
-          id="arr2"
-          viewBox="0 0 10 10"
-          refX="9"
-          refY="5"
-          markerWidth="6"
-          markerHeight="6"
-          orient="auto"
-        >
+        <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
           <path d="M0,0 L10,5 L0,10 z" fill="#888" />
         </marker>
       </defs>
 
-      {/* lane label */}
-      <text x={20} y={22} fill="#888" fontSize={11} fontFamily="monospace">
-        Chat.ingest/1
+      {/* lane title */}
+      <text x={leftPad} y={28} fill="#a8a8a8" fontSize={13} fontFamily="monospace">
+        Chat.ingest/1 — what one message goes through
       </text>
-      <line x1={20} y1={30} x2={w - 20} y2={30} stroke="#222" strokeDasharray="3,3" />
 
       {steps.map((s, i) => {
-        const x = gap + i * (boxW + gap);
-        const y = 70;
+        const row = Math.floor(i / 3);
+        const col = i % 3;
+        const x = leftPad + col * (boxW + colGap);
+        const y = topPad + row * (boxH + rowGap);
+        const isLast = s.id === "5";
         return (
           <g key={s.id}>
-            <rect
-              x={x}
-              y={y}
-              width={boxW}
-              height={boxH}
-              fill="#0a0a0a"
-              stroke={s.id === "5" ? "#3a4a3a" : "#333"}
-              strokeWidth={1}
-            />
-            <text
-              x={x + 8}
-              y={y + 14}
-              fill="#666"
-              fontSize={9}
-              fontFamily="monospace"
-            >
-              [ {s.id} ]
-            </text>
-            <text
-              x={x + boxW / 2}
-              y={y + 30}
-              fill="#e0e0e0"
-              fontSize={11}
-              fontFamily="monospace"
-              textAnchor="middle"
-            >
-              {s.t}
-            </text>
-            <text
-              x={x + boxW / 2}
-              y={y + 46}
-              fill="#888"
-              fontSize={10}
-              fontFamily="monospace"
-              textAnchor="middle"
-            >
-              {s.sub}
-            </text>
-            {i < steps.length - 1 && (
+            <rect x={x} y={y} width={boxW} height={boxH} fill="#0a0a0a" stroke={isLast ? "#3a4a3a" : "#333"} />
+            <text x={x + 16} y={y + 24} fill="#666" fontSize={12} fontFamily="monospace">[ {s.id} ]</text>
+            <text x={x + boxW / 2} y={y + 54} fill="#e0e0e0" fontSize={16} textAnchor="middle" fontFamily="monospace">{s.t}</text>
+            <text x={x + boxW / 2} y={y + 80} fill="#a8a8a8" fontSize={12} textAnchor="middle" fontFamily="monospace">{s.sub}</text>
+
+            {/* horizontal arrow to next box in same row */}
+            {col < 2 && (
               <line
-                x1={x + boxW}
-                y1={y + boxH / 2}
-                x2={x + boxW + gap}
-                y2={y + boxH / 2}
-                stroke="#888"
-                strokeWidth={1}
-                markerEnd="url(#arr2)"
+                x1={x + boxW + 4} y1={y + boxH / 2}
+                x2={x + boxW + colGap - 4} y2={y + boxH / 2}
+                stroke="#888" strokeWidth={1.2} markerEnd="url(#arr2)"
               />
             )}
           </g>
         );
       })}
 
-      {/* dashed line under steps 1-3 = "synchronous, fast" */}
-      <line x1={gap} y1={150} x2={gap + 4 * (boxW + gap) - gap} y2={150} stroke="#3a3a3a" strokeDasharray="2,3" />
-      <text x={gap + (4 * (boxW + gap) - gap) / 2} y={165} fill="#666" fontSize={10} textAnchor="middle" fontFamily="monospace">
-        synchronous on the WS handler · sub-millisecond total
-      </text>
+      {/* curved arrow from end of row 1 to start of row 2 */}
+      {(() => {
+        const r1End = { x: leftPad + 3 * boxW + 2 * colGap, y: topPad + boxH / 2 };
+        const r2Start = { x: leftPad, y: topPad + boxH + rowGap + boxH / 2 };
+        return (
+          <g>
+            <path
+              d={`M ${r1End.x} ${r1End.y} C ${r1End.x + 30} ${r1End.y}, ${r1End.x + 30} ${(r1End.y + r2Start.y) / 2}, ${(r1End.x + r2Start.x) / 2} ${(r1End.y + r2Start.y) / 2} S ${r2Start.x - 30} ${r2Start.y}, ${r2Start.x - 4} ${r2Start.y}`}
+              fill="none" stroke="#888" strokeWidth={1.2} markerEnd="url(#arr2)"
+            />
+          </g>
+        );
+      })()}
 
-      {/* dashed line under steps 4-5 = "asynchronous" */}
-      <line x1={gap + 4 * (boxW + gap)} y1={150} x2={w - gap} y2={150} stroke="#3a3a3a" strokeDasharray="2,3" />
-      <text x={gap + 4 * (boxW + gap) + (w - gap - (gap + 4 * (boxW + gap))) / 2} y={165} fill="#666" fontSize={10} textAnchor="middle" fontFamily="monospace">
-        async, batched
+      {/* lane separator + captions */}
+      <line x1={leftPad} y1={topPad + boxH + rowGap / 2 - 8} x2={leftPad + 3 * boxW + 2 * colGap} y2={topPad + boxH + rowGap / 2 - 8} stroke="#222" strokeDasharray="3,3" />
+      <text x={550} y={topPad + boxH + 24} fill="#a8a8a8" fontSize={12} textAnchor="middle" fontFamily="monospace">
+        ↑ synchronous · sub-millisecond  ·  ↓ async · batched persist
       </text>
     </svg>
   );
 }
 
 function ClusterDiagram() {
-  const cx = 380;
-  const cy = 130;
-  const r = 80;
-  const labels = ["replica 1", "replica 2", "replica 3", "replica 4"];
-  const positions = [0, 90, 180, 270].map((deg) => {
-    const rad = (deg * Math.PI) / 180;
-    return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
-  });
+  // Horizontal row of 4 replica boxes. Mesh edges drawn as arcs ABOVE
+  // them so they never cross the box content. Postgres centered below
+  // with one arrow joining the row to it.
+  const replicaW = 200;
+  const replicaH = 80;
+  const gap = 30;
+  const totalW = 4 * replicaW + 3 * gap;
+  const startX = (1100 - totalW) / 2;
+  const replicaY = 160;
+  const centers = [0, 1, 2, 3].map((i) => ({
+    x: startX + i * (replicaW + gap) + replicaW / 2,
+    y: replicaY + replicaH / 2,
+  }));
 
   return (
-    <svg viewBox="0 0 760 320" width="100%" style={{ display: "block" }}>
+    <svg viewBox="0 0 1100 460" width="100%" style={{ display: "block" }}>
       <defs>
-        <marker
-          id="arr3"
-          viewBox="0 0 10 10"
-          refX="9"
-          refY="5"
-          markerWidth="6"
-          markerHeight="6"
-          orient="auto"
-        >
+        <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
           <path d="M0,0 L10,5 L0,10 z" fill="#666" />
         </marker>
       </defs>
 
-      {/* mesh lines between replicas */}
-      {positions.map((p, i) =>
-        positions.slice(i + 1).map((q, j) => (
-          <line
-            key={`${i}-${j}`}
-            x1={p.x}
-            y1={p.y}
-            x2={q.x}
-            y2={q.y}
-            stroke="#3a3a3a"
-            strokeWidth={1}
-          />
-        )),
+      <text x={startX} y={36} fill="#a8a8a8" fontSize={13} fontFamily="monospace">
+        4 replicas, full mesh over IPv6
+      </text>
+      <text x={startX} y={56} fill="#888" fontSize={12} fontFamily="monospace">
+        dns_cluster polls the service domain · :pg distributes broadcasts
+      </text>
+
+      {/* mesh arcs above the row — every pair of replicas */}
+      {centers.map((p, i) =>
+        centers.slice(i + 1).map((q, j) => {
+          const midX = (p.x + q.x) / 2;
+          const peakY = replicaY - 28 - 18 * (j + i); // higher arc for non-adjacent pairs
+          const path = `M ${p.x} ${replicaY} Q ${midX} ${peakY} ${q.x} ${replicaY}`;
+          return <path key={`${i}-${j}`} d={path} fill="none" stroke="#3a4a3a" strokeWidth={1} />;
+        }),
       )}
 
-      {/* replicas as boxes */}
-      {positions.map((p, i) => (
+      {/* replica boxes */}
+      {centers.map((p, i) => (
         <g key={i}>
-          <rect
-            x={p.x - 60}
-            y={p.y - 22}
-            width={120}
-            height={44}
-            fill="#0a0a0a"
-            stroke="#444"
-          />
-          <text
-            x={p.x}
-            y={p.y - 4}
-            fill="#e0e0e0"
-            fontSize={11}
-            textAnchor="middle"
-            fontFamily="monospace"
-          >
-            {labels[i]}
+          <rect x={p.x - replicaW / 2} y={replicaY} width={replicaW} height={replicaH} fill="#0a0a0a" stroke="#444" />
+          <text x={p.x} y={replicaY + 32} fill="#e0e0e0" fontSize={15} textAnchor="middle" fontFamily="monospace">
+            replica {i + 1}
           </text>
-          <text
-            x={p.x}
-            y={p.y + 12}
-            fill="#888"
-            fontSize={10}
-            textAnchor="middle"
-            fontFamily="monospace"
-          >
+          <text x={p.x} y={replicaY + 56} fill="#888" fontSize={12} textAnchor="middle" fontFamily="monospace">
             eir@&lt;ipv6&gt;
           </text>
         </g>
       ))}
 
-      {/* center label */}
-      <text x={cx} y={cy + 4} fill="#666" fontSize={10} textAnchor="middle" fontFamily="monospace">
-        :pg / dns_cluster
-      </text>
-
-      {/* postgres at the bottom */}
-      <line x1={cx} y1={cy + r + 22} x2={cx} y2={260} stroke="#666" strokeDasharray="2,3" />
-      <rect x={cx - 80} y={260} width={160} height={42} fill="#0a0a0a" stroke="#333" />
-      <text x={cx} y={278} fill="#e0e0e0" fontSize={11} textAnchor="middle" fontFamily="monospace">
+      {/* postgres at bottom, single arrow joining the row */}
+      <rect x={(1100 - 280) / 2} y={360} width={280} height={70} fill="#0a0a0a" stroke="#333" />
+      <text x={550} y={388} fill="#e0e0e0" fontSize={15} textAnchor="middle" fontFamily="monospace">
         postgres
       </text>
-      <text x={cx} y={293} fill="#888" fontSize={10} textAnchor="middle" fontFamily="monospace">
-        shared, private
+      <text x={550} y={410} fill="#888" fontSize={12} textAnchor="middle" fontFamily="monospace">
+        shared, private network
       </text>
 
-      {/* legend */}
-      <text x={20} y={28} fill="#666" fontSize={11} fontFamily="monospace">
-        full mesh · every replica connects to every other over IPv6
+      {/* one arrow from the row's center to postgres */}
+      <line x1={550} y1={replicaY + replicaH + 6} x2={550} y2={356} stroke="#666" strokeWidth={1.2} markerEnd="url(#arr3)" />
+      <text x={566} y={310} fill="#888" fontSize={12} fontFamily="monospace">
+        TCP · ecto pool per replica
       </text>
     </svg>
   );
@@ -696,112 +634,71 @@ function ClusterDiagram() {
 
 // --- atoms ---
 
-function Box({
+// A labelled box. Title at the top, optional lines stacked below. Lines
+// are rendered at fixed 24px intervals so we never collide with borders.
+function NodeBox({
   x,
   y,
   w,
-  h,
   title,
-  sub,
-  sub2,
-  accent,
+  lines = [],
 }: {
   x: number;
   y: number;
   w: number;
-  h: number;
   title: string;
-  sub?: string;
-  sub2?: string;
-  accent?: boolean;
+  lines?: string[];
 }) {
+  const h = 44 + Math.max(0, lines.length) * 24 + 24;
   return (
     <g>
-      <rect
-        x={x}
-        y={y}
-        width={w}
-        height={h}
-        fill="#0a0a0a"
-        stroke={accent ? "#3a4a3a" : "#333"}
-        strokeWidth={1}
-      />
-      <text
-        x={x + w / 2}
-        y={y + 22}
-        fill="#e0e0e0"
-        fontSize={12}
-        textAnchor="middle"
-        fontFamily="monospace"
-      >
+      <rect x={x} y={y} width={w} height={h} fill="#0a0a0a" stroke="#333" />
+      <text x={x + w / 2} y={y + 32} fill="#e0e0e0" fontSize={16} textAnchor="middle" fontFamily="monospace">
         {title}
       </text>
-      {sub && (
+      {lines.map((line, i) => (
         <text
+          key={i}
           x={x + w / 2}
-          y={y + 42}
-          fill="#888"
-          fontSize={10}
+          y={y + 56 + i * 24}
+          fill="#a8a8a8"
+          fontSize={13}
           textAnchor="middle"
           fontFamily="monospace"
         >
-          {sub}
+          {line}
         </text>
-      )}
-      {sub2 && (
-        <text
-          x={x + w / 2}
-          y={y + 58}
-          fill="#666"
-          fontSize={10}
-          textAnchor="middle"
-          fontFamily="monospace"
-        >
-          {sub2}
-        </text>
-      )}
+      ))}
     </g>
   );
 }
 
-function Arrow({
+// Arrow with its label positioned at an explicit (labelX, labelY). This
+// avoids the common failure where a computed midpoint puts the label
+// exactly on top of the arrow line.
+function ArrowLabel({
   x1,
   y1,
   x2,
   y2,
   label,
+  labelX,
+  labelY,
 }: {
   x1: number;
   y1: number;
   x2: number;
   y2: number;
-  label?: string;
+  label: string;
+  labelX: number;
+  labelY: number;
 }) {
-  const mx = (x1 + x2) / 2;
-  const my = (y1 + y2) / 2;
   return (
     <g>
-      <line
-        x1={x1}
-        y1={y1}
-        x2={x2}
-        y2={y2}
-        stroke="#888"
-        strokeWidth={1}
-        markerEnd="url(#arr)"
-      />
-      {label && (
-        <text
-          x={mx}
-          y={my - 4}
-          fill="#888"
-          fontSize={10}
-          textAnchor="middle"
-          fontFamily="monospace"
-        >
-          {label}
-        </text>
-      )}
+      <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#888" strokeWidth={1.2} markerEnd="url(#arr)" />
+      <text x={labelX} y={labelY} fill="#a8a8a8" fontSize={13} textAnchor="middle" fontFamily="monospace">
+        {label}
+      </text>
     </g>
   );
 }
