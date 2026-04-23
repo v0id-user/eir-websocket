@@ -149,7 +149,10 @@ defmodule Eir.Metrics do
     :ets.insert(@table, {:schedulers_util, []})
 
     attach_telemetry()
-    :erlang.system_flag(:scheduler_wall_time, true)
+    # NOTE: scheduler_wall_time is enabled lazily, only while a dashboard
+    # subscriber exists. Leaving it on continuously imposes per-scheduler
+    # bookkeeping overhead on every BEAM scheduler — visible as a CPU
+    # baseline even with zero traffic.
 
     Phoenix.PubSub.subscribe(@pubsub, "eir:reset")
     :timer.send_interval(@tick_ms, :tick)
@@ -161,55 +164,83 @@ defmodule Eir.Metrics do
        prev: now_counters(),
        prev_at: System.monotonic_time(:millisecond),
        prev_reds: prev_reds,
-       prev_swt: sched_wall_time(),
+       prev_swt: nil,
+       swt_enabled?: false,
        tick_n: 0
      }}
   end
 
   @impl true
   def handle_info(:tick, state) do
-    now_at = System.monotonic_time(:millisecond)
-    dt = max(now_at - state.prev_at, 1)
-    curr = now_counters()
+    case EirWeb.MetricsChannel.has_subscribers?() do
+      false ->
+        # Nobody is watching. Disable scheduler_wall_time tracking if it
+        # was on (avoids continuous BEAM bookkeeping cost) and skip all
+        # the rate/percentile work. The tick itself is essentially free.
+        state =
+          if state.swt_enabled? do
+            :erlang.system_flag(:scheduler_wall_time, false)
+            %{state | swt_enabled?: false, prev_swt: nil}
+          else
+            state
+          end
 
-    {total_reds, _} = :erlang.statistics(:reductions)
-    reds_delta = max(total_reds - state.prev_reds, 0)
-    reds_per_sec = reds_delta * 1000 / dt
+        # Reset prev_at so the first tick after someone subscribes
+        # doesn't compute a giant dt-based rate over the idle gap.
+        {:noreply, %{state | prev_at: System.monotonic_time(:millisecond)}}
 
-    rates =
-      for {k, v} <- curr, into: %{} do
-        delta = v - Map.get(state.prev, k, 0)
-        {k, Float.round(delta * 1000 / dt, 1)}
-      end
+      true ->
+        # Someone is watching: do the real work. Enable scheduler_wall_time
+        # lazily on the first such tick.
+        state =
+          if not state.swt_enabled? do
+            :erlang.system_flag(:scheduler_wall_time, true)
+            %{state | swt_enabled?: true, prev_swt: sched_wall_time()}
+          else
+            state
+          end
 
-    rates = Map.put(rates, :reductions, Float.round(reds_per_sec, 0))
-    :ets.insert(@table, {:rates, rates})
+        now_at = System.monotonic_time(:millisecond)
+        dt = max(now_at - state.prev_at, 1)
+        curr = now_counters()
 
-    # per-scheduler utilization percentages — trimmed to online schedulers
-    # only (dirty CPU + dirty IO schedulers would bloat the snapshot ~10x)
-    curr_swt = sched_wall_time()
-    util =
-      sched_util(state.prev_swt, curr_swt)
-      |> Enum.take(:erlang.system_info(:schedulers_online))
+        {total_reds, _} = :erlang.statistics(:reductions)
+        reds_delta = max(total_reds - state.prev_reds, 0)
+        reds_per_sec = reds_delta * 1000 / dt
 
-    :ets.insert(@table, {:schedulers_util, util})
+        rates =
+          for {k, v} <- curr, into: %{} do
+            delta = v - Map.get(state.prev, k, 0)
+            {k, Float.round(delta * 1000 / dt, 1)}
+          end
 
-    # broadcast only every Nth tick so 4 replicas × 100ms doesn't drown the
-    # client in ~180KB/s of JSON. Counters still update every tick; the
-    # dashboard just sees 4Hz updates instead of 10Hz.
-    # Also: skip the broadcast entirely if no client on this node has the
-    # dashboard open. Saves both CPU (snapshot/2 walks ETS, computes
-    # latency percentiles, etc.) and outbound bandwidth, which lets the
-    # service idle properly when no one is watching.
-    tick_n = rem(state.tick_n + 1, @broadcast_every_n_ticks)
+        rates = Map.put(rates, :reductions, Float.round(reds_per_sec, 0))
+        :ets.insert(@table, {:rates, rates})
 
-    if tick_n == 0 and EirWeb.MetricsChannel.has_subscribers?() do
-      snap = snapshot()
-      Phoenix.PubSub.broadcast!(@pubsub, "metrics:live", {:metrics_tick, snap})
+        curr_swt = sched_wall_time()
+        util =
+          sched_util(state.prev_swt || curr_swt, curr_swt)
+          |> Enum.take(:erlang.system_info(:schedulers_online))
+
+        :ets.insert(@table, {:schedulers_util, util})
+
+        tick_n = rem(state.tick_n + 1, @broadcast_every_n_ticks)
+
+        if tick_n == 0 do
+          snap = snapshot()
+          Phoenix.PubSub.broadcast!(@pubsub, "metrics:live", {:metrics_tick, snap})
+        end
+
+        {:noreply,
+         %{
+           state
+           | prev: curr,
+             prev_at: now_at,
+             prev_reds: total_reds,
+             prev_swt: curr_swt,
+             tick_n: tick_n
+         }}
     end
-
-    {:noreply,
-     %{state | prev: curr, prev_at: now_at, prev_reds: total_reds, prev_swt: curr_swt, tick_n: tick_n}}
   end
 
   @impl true
