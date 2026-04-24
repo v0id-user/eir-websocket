@@ -195,6 +195,71 @@ already names each replica `eir@<own-ipv6>` and sets
 `ERL_AFLAGS="-proto_dist inet6_tcp"`, so `dns_cluster` meshes them over
 IPv6 automatically.
 
+### Sleeping idle services to keep the bill down
+
+This is a demo project, not a production service. Most days nothing is
+hitting it. Railway can put services to sleep when they're idle and wake
+them on the first incoming request. You want this on for cost reasons.
+A few things to know before you flip the toggles.
+
+**Where to flip it.** Per-service setting only available in the Railway
+UI, not the CLI:
+
+> service → Settings → Serverless / Sleep when idle → toggle on
+
+There's no `railway` CLI command to set this; you have to click it in
+the dashboard. Do it for each service you want to sleep.
+
+**What sleeps cleanly:**
+
+- `eir-client` — static nginx, no background work, sleeps within minutes
+  of the last request, wakes on the first new one.
+- `eir-simulator` — Elixir app with no scheduled work; sleeps the same
+  way. The first POST to `/run` after it slept incurs a ~2-3s cold
+  start as the BEAM boots.
+
+**What's tricky:**
+
+- `eir-server` will sleep if you toggle it on, but it has continuous
+  internal work that you should be aware of. The metrics GenServer
+  ticks every 100ms (now a true no-op when no dashboard subscriber is
+  connected — see `lib/eir/metrics.ex`), `dns_cluster` polls DNS every
+  ~5s, Phoenix's default telemetry poller fires every 10s. None of
+  that generates *external* HTTP traffic, so Railway's sleep heuristic
+  (idle = no incoming requests) still triggers, but the BEAM itself is
+  doing baseline scheduling work right up until Railway pauses the
+  container. If you scale to multiple replicas, internal cluster
+  gossip between them counts as activity for the sleep heuristic on
+  some services. Test with one replica first.
+
+- `postgres` (the plain `postgres:16-alpine` image used here) is a
+  stateful service. Even with sleep enabled, it almost certainly won't
+  ever sleep, because:
+  1. `eir-server`'s Ecto pool keeps several connections open to it.
+  2. Those connections are pinged periodically by `db_connection`.
+  3. Postgres sees ongoing activity and Railway's sleep doesn't apply
+     to services holding open TCP connections.
+
+  If you really want Postgres to idle, set `POOL_SIZE=1` on `eir-server`
+  to minimize the connection count, or switch to Railway's managed
+  Postgres addon (it has its own scale-down behavior the plain image
+  doesn't). For a demo this isn't worth the complexity — postgres
+  staying awake costs cents per day.
+
+**The cascade.** When `eir-server` sleeps, its connection pool drops,
+which lets `postgres` go quiet (though still not technically asleep
+from Railway's perspective). When all four services are quiet you're
+paying ~zero except for the small storage footprint of postgres on
+disk. Wake-up on first request is fast for the static services
+(<1s) and ~3s for the BEAM cold start.
+
+**The honest tradeoff.** Sleep is great for a demo project. For
+anything trying to be a real product, leave the gateway always-on —
+~3s cold-start is unacceptable for a "real-time" service, and the
+ETS cache empty on every wake means the first wave of history
+queries all fall through to Postgres. Sleep is a "this is a portfolio
+piece, not infrastructure" choice.
+
 ## Data model
 
 One table, `messages`. Primary key is a UUIDv7 canonical string (time
